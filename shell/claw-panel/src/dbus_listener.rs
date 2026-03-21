@@ -3,16 +3,17 @@
 // TouchFlow dispatches gesture events over D-Bus to control the Claw Panel
 // (right-edge swipe to show, swipe-right-on-panel to hide, etc.).
 // The palette daemon broadcasts colour changes that we pick up here.
+//
+// On non-Linux platforms the listener is a no-op that keeps the subscription
+// alive without connecting to any bus.
 
-use futures_util::StreamExt;
-
-use slate_common::dbus::{CLAW_INTERFACE, CLAW_PATH, PALETTE_BUS_NAME, PALETTE_PATH};
 use slate_common::Palette;
 
-// Unused import silenced — CLAW_INTERFACE is used in the attribute string
-// literal; we still verify it in tests.
-#[allow(unused_imports)]
-use slate_common::dbus::PALETTE_INTERFACE;
+// Constants are used in cfg(linux) blocks and tests.
+#[cfg(any(target_os = "linux", test))]
+use slate_common::dbus::{CLAW_INTERFACE, CLAW_PATH};
+#[cfg(target_os = "linux")]
+use slate_common::dbus::{PALETTE_BUS_NAME, PALETTE_INTERFACE, PALETTE_PATH};
 
 /// Events received over D-Bus that the panel cares about.
 #[derive(Debug, Clone)]
@@ -28,16 +29,19 @@ pub enum DbusEvent {
 // ---------------------------------------------------------------------------
 
 /// The D-Bus object that TouchFlow calls to show/hide the panel.
+#[cfg(target_os = "linux")]
 pub struct ClawService {
     event_tx: tokio::sync::mpsc::UnboundedSender<DbusEvent>,
 }
 
+#[cfg(target_os = "linux")]
 impl ClawService {
     pub fn new(event_tx: tokio::sync::mpsc::UnboundedSender<DbusEvent>) -> Self {
         Self { event_tx }
     }
 }
 
+#[cfg(target_os = "linux")]
 #[zbus::interface(name = "org.slate.Claw")]
 impl ClawService {
     async fn show(&self) {
@@ -61,13 +65,21 @@ impl ClawService {
 ///
 /// Fetches the initial palette, then listens for the `Changed` signal.
 /// Each palette (initial + every update) is sent to `event_tx`.
+#[cfg(target_os = "linux")]
 pub async fn watch_palette(
     event_tx: tokio::sync::mpsc::UnboundedSender<DbusEvent>,
 ) -> Result<(), anyhow::Error> {
+    use futures_util::StreamExt;
+
     let connection = zbus::Connection::session().await?;
 
-    let proxy =
-        zbus::Proxy::new(&connection, PALETTE_BUS_NAME, PALETTE_PATH, CLAW_INTERFACE).await?;
+    let proxy = zbus::Proxy::new(
+        &connection,
+        PALETTE_BUS_NAME,
+        PALETTE_PATH,
+        PALETTE_INTERFACE,
+    )
+    .await?;
 
     // Fetch initial palette via the PaletteToml property.
     match proxy.get_property::<String>("PaletteToml").await {
@@ -96,27 +108,49 @@ pub async fn watch_palette(
     Ok(())
 }
 
-/// Register the Claw D-Bus service and start the palette watcher.
-///
-/// Returns the event receiver that the iced app polls for D-Bus events.
-pub async fn start() -> Result<tokio::sync::mpsc::UnboundedReceiver<DbusEvent>, anyhow::Error> {
-    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+// ---------------------------------------------------------------------------
+// D-Bus subscription entry point
+// ---------------------------------------------------------------------------
 
-    let connection = zbus::Connection::session().await?;
+/// Run the D-Bus listener loop on Linux: register the Claw service and
+/// watch for palette changes. Events are forwarded through `event_tx`.
+///
+/// This function never returns under normal operation; it keeps the D-Bus
+/// connection alive so incoming signals and method calls are processed.
+#[cfg(target_os = "linux")]
+pub async fn run(event_tx: tokio::sync::mpsc::UnboundedSender<DbusEvent>) {
+    let connection = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("failed to connect to session bus: {e}");
+            return;
+        }
+    };
 
     // Publish our own interface so TouchFlow can call Show/Hide/Toggle.
     let service = ClawService::new(event_tx.clone());
-    connection.object_server().at(CLAW_PATH, service).await?;
+    if let Err(e) = connection.object_server().at(CLAW_PATH, service).await {
+        tracing::error!("failed to register Claw D-Bus service: {e}");
+        return;
+    }
+
+    tracing::info!("Claw D-Bus service registered at {CLAW_PATH}");
 
     // Start palette watcher in background.
-    let palette_tx = event_tx.clone();
-    tokio::spawn(async move {
-        if let Err(e) = watch_palette(palette_tx).await {
-            tracing::warn!("Palette watcher failed: {e}");
-        }
-    });
+    let palette_tx = event_tx;
+    if let Err(e) = watch_palette(palette_tx).await {
+        tracing::warn!("Palette watcher ended: {e}");
+    }
 
-    Ok(event_rx)
+    // Keep the task alive so the D-Bus connection is not dropped.
+    std::future::pending::<()>().await;
+}
+
+/// Non-Linux stub: keeps the subscription future alive without doing anything.
+#[cfg(not(target_os = "linux"))]
+pub async fn run(_event_tx: tokio::sync::mpsc::UnboundedSender<DbusEvent>) {
+    tracing::warn!("D-Bus listener is not available on this platform");
+    std::future::pending::<()>().await;
 }
 
 #[cfg(test)]
@@ -134,5 +168,13 @@ mod tests {
     fn claw_interface_path_constants_match_spec() {
         assert_eq!(CLAW_INTERFACE, "org.slate.Claw");
         assert_eq!(CLAW_PATH, "/org/slate/Claw");
+    }
+
+    #[test]
+    fn dbus_event_all_variants_constructible() {
+        let _show = DbusEvent::Show;
+        let _hide = DbusEvent::Hide;
+        let _toggle = DbusEvent::Toggle;
+        let _palette = DbusEvent::PaletteChanged(Palette::default());
     }
 }
