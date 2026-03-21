@@ -1,9 +1,10 @@
 /// `slate build` — compile the SlateOS shell crates.
 ///
 /// For generic-x86 the host toolchain is used directly; aarch64 targets
-/// require a musl cross toolchain (future work).  The subcommand drives
-/// `cargo build --workspace` in the slateos repo root so every shell crate
-/// is compiled in one pass.
+/// use LLVM/Clang cross-compilation via the `cross` module.  The
+/// subcommand drives `cargo build --workspace` in the slateos repo root
+/// so every shell crate is compiled in one pass.
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::Instant;
@@ -12,6 +13,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use tracing::{debug, error, info, warn};
 
+use crate::config::CliConfig;
+use crate::cross;
 use crate::device::Device;
 
 // ---------------------------------------------------------------------------
@@ -109,16 +112,30 @@ pub fn run(args: BuildArgs) -> Result<()> {
 
     print_header(&args);
 
-    // Warn early if cross-compilation is requested — not yet implemented.
-    if args.device.needs_cross_compile() {
-        warn!(
-            "cross-compilation for {} is not yet implemented in slate CLI",
-            args.device
-        );
-        warn!("falling back to native host toolchain — binaries will not run on target");
-    }
+    // Resolve cross-compilation environment when targeting aarch64.
+    let cross_env = if args.device.needs_cross_compile() {
+        let cli_config = CliConfig::load().unwrap_or_default();
+        let target = args.device.cargo_target();
 
-    let status = invoke_cargo(&repo_root, &args)?;
+        match cross::setup_cross_env(target, &cli_config.cross_toolchain) {
+            Some(env) => {
+                info!(target, "cross-compiling with LLVM/Clang toolchain");
+                Some(env)
+            }
+            None => {
+                warn!(
+                    "cross-compilation toolchain not available for {}",
+                    args.device
+                );
+                warn!("falling back to native host toolchain — binaries will not run on target");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let status = invoke_cargo(&repo_root, &args, cross_env.as_ref())?;
 
     if status.success() {
         let out_dir = output_dir(&repo_root, &args);
@@ -153,9 +170,17 @@ fn print_header(args: &BuildArgs) {
 
 /// Invoke `cargo build --workspace` with the right flags for the given args.
 ///
+/// When `cross_env` is `Some`, the cross-compilation environment variables
+/// are injected into the cargo process.  When `None` and the device needs
+/// cross-compilation, the build falls back to the native host toolchain.
+///
 /// Streams cargo's stdout/stderr directly to the terminal so the user sees
 /// live progress output.
-fn invoke_cargo(repo_root: &Path, args: &BuildArgs) -> Result<ExitStatus> {
+fn invoke_cargo(
+    repo_root: &Path,
+    args: &BuildArgs,
+    cross_env: Option<&HashMap<String, String>>,
+) -> Result<ExitStatus> {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
 
@@ -173,6 +198,14 @@ fn invoke_cargo(repo_root: &Path, args: &BuildArgs) -> Result<ExitStatus> {
     // For other devices we pass the explicit musl triple.
     if args.device.needs_cross_compile() {
         cmd.arg("--target").arg(args.device.cargo_target());
+    }
+
+    // Inject cross-compilation env vars when the toolchain is available.
+    if let Some(env) = cross_env {
+        for (key, value) in env {
+            debug!(key, value, "setting cross-compile env var");
+            cmd.env(key, value);
+        }
     }
 
     cmd.current_dir(repo_root);
