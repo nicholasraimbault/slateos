@@ -12,6 +12,7 @@
 mod build;
 mod check;
 mod config;
+mod dev;
 mod device;
 mod flash;
 mod services;
@@ -61,6 +62,9 @@ enum Command {
 
     /// Run check + clippy + tests in one command.
     Check(check::CheckArgs),
+
+    /// Start a development loop (rebuild on file change).
+    Dev(dev::DevArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -88,5 +92,6 @@ fn main() -> Result<()> {
         Command::Status(args) => status::run(args),
         Command::Services(args) => services::run(args),
         Command::Check(args) => check::run(args),
+        Command::Dev(args) => dev::run(args),
     }
 }
