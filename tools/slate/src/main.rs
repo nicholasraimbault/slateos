@@ -15,6 +15,7 @@ mod config;
 mod dev;
 mod device;
 mod flash;
+mod info;
 mod services;
 mod status;
 mod workspace;
@@ -65,6 +66,9 @@ enum Command {
 
     /// Start a development loop (rebuild on file change).
     Dev(dev::DevArgs),
+
+    /// Print system and project diagnostic info.
+    Info(info::InfoArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -93,5 +97,6 @@ fn main() -> Result<()> {
         Command::Services(args) => services::run(args),
         Command::Check(args) => check::run(args),
         Command::Dev(args) => dev::run(args),
+        Command::Info(args) => info::run(args),
     }
 }
