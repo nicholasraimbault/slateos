@@ -1,9 +1,14 @@
 /// slate-palette — Dynamic theming daemon for Slate OS.
 ///
-/// Watches the wallpaper symlink, extracts Material You colours via matugen,
-/// generates theme files (TOML, CSS, KDL), broadcasts over D-Bus, and signals
-/// Waybar to reload.
+/// Watches the wallpaper symlink, extracts Material You colours (via matugen or
+/// a built-in fallback), generates theme files (TOML, CSS, KDL), broadcasts
+/// over D-Bus, and signals Waybar to reload.
+///
+/// Modes:
+///   (default)   — watch mode: run continuously, re-extract on wallpaper changes
+///   --oneshot   — extract once from the current wallpaper, write files, broadcast, exit
 mod broadcast;
+mod builtin_extract;
 mod extractor;
 mod output;
 mod reload;
@@ -12,7 +17,17 @@ mod watcher;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use slate_common::Palette;
+
+/// Dynamic theming daemon for Slate OS.
+#[derive(Parser, Debug)]
+#[command(name = "slate-palette", about = "Dynamic Material You theming")]
+struct Cli {
+    /// Extract palette once, write output files, broadcast via D-Bus, then exit.
+    #[arg(long)]
+    oneshot: bool,
+}
 
 /// Canonical location of the wallpaper symlink.
 fn wallpaper_symlink() -> PathBuf {
@@ -110,13 +125,49 @@ async fn handle_wallpaper_change(
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Initialise tracing.
-    tracing_subscriber::fmt::init();
+/// Run --oneshot mode: resolve the wallpaper, extract palette, write outputs,
+/// broadcast via D-Bus, then exit.
+async fn run_oneshot() -> Result<()> {
+    let symlink = wallpaper_symlink();
 
-    tracing::info!("slate-palette starting");
+    // Resolve the wallpaper symlink to its target image.
+    let image_path = std::fs::canonicalize(&symlink).with_context(|| {
+        format!(
+            "resolve wallpaper symlink {} — does the wallpaper exist?",
+            symlink.display()
+        )
+    })?;
+    tracing::info!("oneshot: wallpaper is {}", image_path.display());
 
+    // Extract palette from the wallpaper image.
+    let palette = extractor::extract_palette(&image_path)
+        .await
+        .context("extract palette in oneshot mode")?;
+
+    // Write output files.
+    write_all_outputs(&palette).context("write palette files in oneshot mode")?;
+
+    // Broadcast via D-Bus (best-effort — during first-boot there may be
+    // no session bus, so we log and continue rather than failing).
+    match broadcast::create_connection(&palette).await {
+        Ok(connection) => {
+            if let Err(err) = broadcast::broadcast_palette(&connection, &palette).await {
+                tracing::warn!("oneshot: D-Bus broadcast failed (non-fatal): {err:#}");
+            }
+        }
+        Err(err) => {
+            tracing::warn!("oneshot: could not connect to D-Bus (non-fatal): {err:#}");
+        }
+    }
+
+    reload::reload_waybar();
+
+    tracing::info!("oneshot: palette written successfully");
+    Ok(())
+}
+
+/// Run the continuous watch-mode daemon.
+async fn run_watch() -> Result<()> {
     // Load initial palette.
     let mut palette = load_initial_palette();
 
@@ -134,7 +185,7 @@ async fn main() -> Result<()> {
     let (mut rx, _watcher) =
         watcher::start_watching(wallpaper_symlink()).context("start wallpaper watcher")?;
 
-    tracing::info!("slate-palette ready");
+    tracing::info!("slate-palette ready (watch mode)");
 
     // Event loop with graceful shutdown.
     loop {
@@ -162,4 +213,21 @@ async fn main() -> Result<()> {
 
     tracing::info!("slate-palette stopped");
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialise tracing.
+    tracing_subscriber::fmt::init();
+
+    let cli = Cli::parse();
+
+    tracing::info!("slate-palette starting");
+
+    if cli.oneshot {
+        tracing::info!("running in oneshot mode");
+        run_oneshot().await
+    } else {
+        run_watch().await
+    }
 }
