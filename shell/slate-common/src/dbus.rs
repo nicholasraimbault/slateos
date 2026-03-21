@@ -35,6 +35,12 @@ pub const CLAW_INTERFACE: &str = "org.slate.Claw";
 pub const CLAW_PATH: &str = "/org/slate/Claw";
 
 // ---------------------------------------------------------------------------
+// Suggestion bar (slate-suggest)
+// ---------------------------------------------------------------------------
+pub const SUGGEST_INTERFACE: &str = "org.slate.Suggest";
+pub const SUGGEST_PATH: &str = "/org/slate/Suggest";
+
+// ---------------------------------------------------------------------------
 // Settings app (slate-settings)
 // ---------------------------------------------------------------------------
 pub const SETTINGS_INTERFACE: &str = "org.slate.Settings";
@@ -80,6 +86,7 @@ mod tests {
             DOCK_INTERFACE,
             LAUNCHER_INTERFACE,
             CLAW_INTERFACE,
+            SUGGEST_INTERFACE,
             SETTINGS_INTERFACE,
         ] {
             assert!(
@@ -95,6 +102,7 @@ mod tests {
             DOCK_PATH,
             LAUNCHER_PATH,
             CLAW_PATH,
+            SUGGEST_PATH,
             SETTINGS_PATH,
         ] {
             assert!(
