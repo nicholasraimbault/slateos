@@ -122,10 +122,7 @@ fn read_service_dir(parent: &Path, source: ServiceSource) -> Result<Vec<ServiceI
             continue;
         }
 
-        let name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let name = entry.file_name().to_string_lossy().to_string();
 
         let info = parse_service(&path, name, source.clone());
         services.push(info);

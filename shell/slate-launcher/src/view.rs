@@ -287,7 +287,6 @@ mod tests {
         let recent: Vec<&AppEntry> = vec![&apps[0]];
         let main: Vec<&AppEntry> = vec![&apps[1], &apps[2]];
         let feedback = LaunchFeedback::new();
-        let _grid =
-            build_grid_with_sections(&apps, &recent, &main, 6, 64.0, 20.0, &feedback);
+        let _grid = build_grid_with_sections(&apps, &recent, &main, 6, 64.0, 20.0, &feedback);
     }
 }

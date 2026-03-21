@@ -14,17 +14,20 @@
 // Wayland session. Suppress dead_code warnings crate-wide.
 #![allow(dead_code)]
 
+mod clipboard;
 mod context;
 mod conversation;
 mod dbus_listener;
 mod openclaw;
 mod panel;
+mod toast;
 
 use context::WindowContext;
 use conversation::Conversation;
 use openclaw::{ClientEvent, OpenClawClient, QueryMessage};
 use panel::PanelAction;
 use slate_common::Palette;
+use toast::ToastState;
 
 // iced_layershell is Wayland-only; on macOS we fall back to a plain iced app
 // for development purposes.
@@ -47,6 +50,7 @@ struct ClawPanel {
     input_text: String,
     openclaw_client: Option<OpenClawClient>,
     is_streaming: bool,
+    toast_state: ToastState,
 }
 
 impl Default for ClawPanel {
@@ -60,6 +64,7 @@ impl Default for ClawPanel {
             input_text: String::new(),
             openclaw_client: None,
             is_streaming: false,
+            toast_state: ToastState::new(),
         }
     }
 }
@@ -107,6 +112,12 @@ enum Message {
 
     // The OpenClaw client handle has been created by the background task.
     OpenClawClientReady(OpenClawClient),
+
+    // Clipboard copy result (success message or error string)
+    ClipboardResult(Result<String, String>),
+
+    // Toast auto-dismiss tick
+    ToastTick,
 }
 
 // On Linux the message must be convertible to LayershellCustomActions. When no
@@ -261,10 +272,12 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
             PanelAction::Send => {
                 return update_app(app, Message::Send);
             }
-            PanelAction::ApplyCodeBlock(_code) => {
-                // Applying code blocks is a future feature that would
-                // communicate with the focused editor via some protocol.
-                tracing::info!("Apply code block requested (not yet implemented)");
+            PanelAction::ApplyCodeBlock(code) => {
+                let context = app.current_context.clone();
+                return iced::Task::perform(
+                    apply_code_block(code, context),
+                    Message::ClipboardResult,
+                );
             }
         },
         Message::ContextPollTick => {
@@ -309,9 +322,54 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
             tracing::info!("OpenClaw client handle ready");
             app.openclaw_client = Some(client);
         }
+        Message::ClipboardResult(result) => match result {
+            Ok(msg) => {
+                app.toast_state.show_success(msg);
+            }
+            Err(err) => {
+                tracing::warn!("clipboard operation failed: {err}");
+                app.toast_state.show_error(err);
+            }
+        },
+        Message::ToastTick => {
+            app.toast_state.tick();
+        }
     }
 
     iced::Task::none()
+}
+
+/// Copy a code block to clipboard and optionally inject into a focused terminal.
+///
+/// Returns `Ok(message)` with a user-facing success string, or `Err(message)`
+/// with a user-facing error string. Both variants are suitable for displaying
+/// in a toast notification.
+async fn apply_code_block(code: String, context: Option<WindowContext>) -> Result<String, String> {
+    // Always copy to clipboard first.
+    clipboard::copy_to_clipboard(&code)
+        .await
+        .map_err(|e| format!("Copy failed: {e}"))?;
+
+    // If the focused window is a terminal, also inject via wtype.
+    if let Some(ref ctx) = context {
+        if clipboard::is_terminal_window(&ctx.app_id, &ctx.title) {
+            match clipboard::inject_text_wtype(&code).await {
+                Ok(()) => {
+                    tracing::info!("code block copied and injected into terminal");
+                    return Ok("Copied & pasted!".to_string());
+                }
+                Err(e) => {
+                    // wtype failed but clipboard copy succeeded -- still a
+                    // partial success.
+                    tracing::warn!("wtype injection failed: {e}");
+                    return Ok("Copied! (paste failed)".to_string());
+                }
+            }
+        }
+    }
+
+    tracing::info!("code block copied to clipboard");
+    Ok("Copied!".to_string())
 }
 
 fn view_app(app: &ClawPanel) -> iced::Element<'_, Message> {
@@ -328,19 +386,31 @@ fn view_app(app: &ClawPanel) -> iced::Element<'_, Message> {
         &app.current_context,
         &app.input_text,
         app.is_streaming,
+        &app.toast_state,
+        app.palette.surface,
     )
     .map(Message::PanelAction)
 }
 
-/// Build all iced subscriptions: D-Bus events, OpenClaw WebSocket, and
-/// periodic context polling.
-fn subscription_app(_app: &ClawPanel) -> iced::Subscription<Message> {
+/// Build all iced subscriptions: D-Bus events, OpenClaw WebSocket,
+/// periodic context polling, and toast auto-dismiss.
+fn subscription_app(app: &ClawPanel) -> iced::Subscription<Message> {
     let dbus_sub = dbus_subscription();
     let openclaw_sub = openclaw_subscription();
     let context_sub = iced::time::every(std::time::Duration::from_secs(CONTEXT_POLL_SECS))
         .map(|_| Message::ContextPollTick);
 
-    iced::Subscription::batch([dbus_sub, openclaw_sub, context_sub])
+    let mut subs = vec![dbus_sub, openclaw_sub, context_sub];
+
+    // Only tick the toast timer when a toast is visible, to avoid
+    // unnecessary wakeups when the panel is idle.
+    if app.toast_state.is_visible() {
+        let toast_sub =
+            iced::time::every(std::time::Duration::from_millis(250)).map(|_| Message::ToastTick);
+        subs.push(toast_sub);
+    }
+
+    iced::Subscription::batch(subs)
 }
 
 /// Subscription that runs the D-Bus listener and forwards events as Messages.
@@ -652,5 +722,68 @@ mod tests {
             CONTEXT_POLL_SECS >= 1 && CONTEXT_POLL_SECS <= 10,
             "context poll interval should be between 1 and 10 seconds"
         );
+    }
+
+    #[test]
+    fn update_clipboard_result_ok_shows_success_toast() {
+        let mut panel = ClawPanel::default();
+        let _ = update_app(
+            &mut panel,
+            Message::ClipboardResult(Ok("Copied!".to_string())),
+        );
+        assert!(panel.toast_state.is_visible());
+        let toast = panel.toast_state.current().expect("should have toast");
+        assert_eq!(toast.message, "Copied!");
+        assert_eq!(toast.kind, toast::ToastKind::Success);
+    }
+
+    #[test]
+    fn update_clipboard_result_err_shows_error_toast() {
+        let mut panel = ClawPanel::default();
+        let _ = update_app(
+            &mut panel,
+            Message::ClipboardResult(Err("wl-copy not found".to_string())),
+        );
+        assert!(panel.toast_state.is_visible());
+        let toast = panel.toast_state.current().expect("should have toast");
+        assert_eq!(toast.message, "wl-copy not found");
+        assert_eq!(toast.kind, toast::ToastKind::Error);
+    }
+
+    #[test]
+    fn update_toast_tick_calls_tick() {
+        let mut panel = ClawPanel::default();
+        // Set an already-expired toast
+        panel.toast_state.show_success("Gone".to_string());
+        panel.toast_state = {
+            let mut ts = ToastState::new();
+            ts.show_success("test".to_string());
+            ts
+        };
+        // Toast is visible right after creation
+        assert!(panel.toast_state.is_visible());
+
+        // ToastTick should not remove a non-expired toast
+        let _ = update_app(&mut panel, Message::ToastTick);
+        assert!(panel.toast_state.is_visible());
+    }
+
+    #[test]
+    fn update_apply_code_block_returns_task() {
+        let mut panel = ClawPanel::default();
+        let task = update_app(
+            &mut panel,
+            Message::PanelAction(PanelAction::ApplyCodeBlock("echo hello".to_string())),
+        );
+        // The task should be non-trivial (it performs clipboard copy).
+        // We cannot easily inspect iced::Task internals, but we can
+        // verify the function does not panic.
+        let _ = task;
+    }
+
+    #[test]
+    fn default_panel_has_no_toast() {
+        let panel = ClawPanel::default();
+        assert!(!panel.toast_state.is_visible());
     }
 }

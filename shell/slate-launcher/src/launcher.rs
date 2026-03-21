@@ -30,7 +30,11 @@ struct ScreenInfo {
 
 impl Default for ScreenInfo {
     fn default() -> Self {
-        Self { width: 2560, height: 1600, scale: 2.0 }
+        Self {
+            width: 2560,
+            height: 1600,
+            scale: 2.0,
+        }
     }
 }
 
@@ -61,7 +65,11 @@ pub enum Message {
     /// User tapped an app at the given index in the combined (recent + main) list.
     LaunchApp(usize),
     PaletteChanged(Palette),
-    ScreenSizeChanged { width: u32, height: u32, scale: f32 },
+    ScreenSizeChanged {
+        width: u32,
+        height: u32,
+        scale: f32,
+    },
     KeyPress(iced::keyboard::Key),
     DbusEvent(DbusEvent),
     Noop,
@@ -135,12 +143,23 @@ impl Launcher {
                 self.palette = palette;
                 Task::none()
             }
-            Message::ScreenSizeChanged { width, height, scale } => {
-                self.screen_info = ScreenInfo { width, height, scale };
+            Message::ScreenSizeChanged {
+                width,
+                height,
+                scale,
+            } => {
+                self.screen_info = ScreenInfo {
+                    width,
+                    height,
+                    scale,
+                };
                 self.layout = layout::compute_layout(width, height, scale);
                 tracing::debug!(
                     "screen size changed: {}x{} @ {:.1}x -> {} launcher columns",
-                    width, height, scale, self.layout.launcher_columns
+                    width,
+                    height,
+                    scale,
+                    self.layout.launcher_columns
                 );
                 Task::none()
             }
@@ -178,8 +197,12 @@ impl Launcher {
         }
         let is_shell_mode = search::is_shell_command(&self.search_query);
         view::build_view(
-            &self.search_query, &self.apps, &self.recent,
-            &self.layout, &self.feedback, is_shell_mode,
+            &self.search_query,
+            &self.apps,
+            &self.recent,
+            &self.layout,
+            &self.feedback,
+            is_shell_mode,
         )
     }
 
@@ -383,7 +406,9 @@ mod tests {
     fn screen_size_changed_updates_layout() {
         let (mut launcher, _) = Launcher::new();
         let _ = launcher.update(Message::ScreenSizeChanged {
-            width: 1080, height: 2400, scale: 2.5,
+            width: 1080,
+            height: 2400,
+            scale: 2.5,
         });
         assert_eq!(launcher.layout.launcher_columns, 3);
     }
@@ -392,7 +417,9 @@ mod tests {
     fn screen_size_changed_tablet_layout() {
         let (mut launcher, _) = Launcher::new();
         let _ = launcher.update(Message::ScreenSizeChanged {
-            width: 1800, height: 1200, scale: 2.0,
+            width: 1800,
+            height: 1200,
+            scale: 2.0,
         });
         assert_eq!(launcher.layout.launcher_columns, 6);
     }
@@ -409,7 +436,10 @@ mod tests {
         launcher.recent.record_launch("firefox");
         let _ = launcher.update(Message::SearchChanged("fire".to_string()));
         let (recent, _main) = launcher.split_recent_and_main();
-        assert!(recent.is_empty(), "recent section should be hidden during search");
+        assert!(
+            recent.is_empty(),
+            "recent section should be hidden during search"
+        );
     }
 
     #[test]
