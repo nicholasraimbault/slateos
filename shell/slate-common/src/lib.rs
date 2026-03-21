@@ -8,7 +8,9 @@ pub mod layout;
 pub mod palette;
 pub mod settings;
 pub mod theme;
+pub mod toast;
 
 // Re-exports for convenience
 pub use palette::Palette;
 pub use settings::Settings;
+pub use toast::{ToastKind, ToastState};
