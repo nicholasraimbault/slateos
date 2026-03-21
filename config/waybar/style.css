@@ -1,10 +1,25 @@
-/* Slate OS Waybar — Tablet-first dark theme */
+/* Slate OS Waybar — Adaptive dark theme
+ *
+ * Works for both tablet (pixel-tablet) and desktop (generic-x86) configs.
+ * Waybar height and spacing are set in each device's .jsonc config;
+ * CSS handles colors, padding, and touch-target sizing.
+ *
+ * On tablets the bar is 40px tall with generous padding.
+ * On desktops the bar is 30px tall with tighter padding.
+ * Waybar applies the correct config per device at launch.
+ */
+
+/* ── Base reset ──────────────────────────────────────────────────── */
 
 * {
     font-family: "Inter", "Noto Sans", sans-serif;
     font-size: 13px;
     min-height: 0;
+    padding: 0;
+    margin: 0;
 }
+
+/* ── Bar background ─────────────────────────────────────────────── */
 
 window#waybar {
     background-color: #1a1a2e;
@@ -12,32 +27,57 @@ window#waybar {
     border-bottom: 1px solid rgba(100, 149, 237, 0.3);
 }
 
-/* Touch targets: visual height 30px, padded clickable area for fingers */
+window#waybar.hidden {
+    opacity: 0;
+}
+
+/* ── Shared module styling ──────────────────────────────────────── */
+
+/* Every clickable module gets consistent padding and rounded corners.
+ * The min-height ensures finger-friendly touch targets on tablets
+ * (the 30px bar on desktop naturally constrains this). */
 #clock,
-#workspaces button,
 #battery,
 #backlight,
-#network,
+#pulseaudio,
+#bluetooth,
+#cpu,
+#memory,
+#custom-wifi,
+#custom-netspeed,
+#custom-keyboard,
+#custom-apps,
 #custom-power {
     padding: 4px 10px;
     margin: 0 2px;
     border-radius: 8px;
+    min-height: 20px;
 }
 
-/* --- Left: clock --- */
+/* ── Left: clock ────────────────────────────────────────────────── */
 
 #clock {
     color: #e0e0e0;
     font-weight: 600;
 }
 
-/* --- Center: workspace indicators --- */
+/* ── Left: apps button ──────────────────────────────────────────── */
+
+#custom-apps {
+    color: #e0e0e0;
+    font-size: 16px;
+    padding: 4px 14px;
+}
+
+/* ── Center: workspace indicators ───────────────────────────────── */
 
 #workspaces button {
     color: rgba(224, 224, 224, 0.5);
     background: transparent;
     border: none;
     padding: 4px 6px;
+    border-radius: 8px;
+    min-height: 20px;
 }
 
 #workspaces button.active {
@@ -45,7 +85,7 @@ window#waybar {
     background-color: rgba(100, 149, 237, 0.15);
 }
 
-/* --- Right modules --- */
+/* ── Right: battery ─────────────────────────────────────────────── */
 
 #battery {
     color: #66BB6A;
@@ -57,36 +97,94 @@ window#waybar {
 
 #battery.critical {
     color: #EF5350;
+    animation: pulse 1.5s ease-in-out infinite;
 }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1.0; }
+    50%      { opacity: 0.6; }
+}
+
+/* ── Right: backlight ───────────────────────────────────────────── */
 
 #backlight {
     color: #e0e0e0;
 }
 
-#network {
+/* ── Right: volume ──────────────────────────────────────────────── */
+
+#pulseaudio {
     color: #e0e0e0;
 }
+
+#pulseaudio.muted {
+    color: rgba(224, 224, 224, 0.4);
+}
+
+/* ── Right: bluetooth ───────────────────────────────────────────── */
+
+#bluetooth {
+    color: #42A5F5;
+}
+
+#bluetooth.disabled {
+    color: rgba(224, 224, 224, 0.3);
+}
+
+/* ── Right: wifi ────────────────────────────────────────────────── */
+
+#custom-wifi {
+    color: #e0e0e0;
+}
+
+/* ── Right: keyboard toggle (tablet only) ───────────────────────── */
+
+#custom-keyboard {
+    color: #e0e0e0;
+    font-size: 16px;
+    padding: 4px 14px;
+}
+
+/* ── Right: system info (desktop only) ──────────────────────────── */
+
+#cpu {
+    color: #7E57C2;
+}
+
+#memory {
+    color: #26A69A;
+}
+
+#custom-netspeed {
+    color: rgba(224, 224, 224, 0.6);
+    font-size: 12px;
+}
+
+/* ── Right: power button ────────────────────────────────────────── */
 
 #custom-power {
     color: #EF5350;
     font-size: 15px;
-    padding: 4px 12px;
+    padding: 4px 14px;
 }
 
 #custom-power:hover {
     background-color: rgba(239, 83, 80, 0.15);
 }
 
-/* Hover/touch feedback */
+/* ── Hover / touch feedback ─────────────────────────────────────── */
+
 #clock:hover,
-#workspaces button:hover,
 #battery:hover,
 #backlight:hover,
-#network:hover {
+#pulseaudio:hover,
+#bluetooth:hover,
+#cpu:hover,
+#memory:hover,
+#custom-wifi:hover,
+#custom-netspeed:hover,
+#custom-keyboard:hover,
+#custom-apps:hover,
+#workspaces button:hover {
     background-color: rgba(100, 149, 237, 0.1);
-}
-
-/* Hide when Niri requests it */
-window#waybar.hidden {
-    opacity: 0;
 }

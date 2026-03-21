@@ -17,16 +17,18 @@
     ],
 
     "modules-right": [
+        "cpu",
+        "memory",
+        "custom/netspeed",
         "backlight",
         "pulseaudio",
-        "custom/wifi",
-        "battery",
         "custom/power"
     ],
 
     "clock": {
         "format": "{:%H:%M  %a %b %d}",
-        "tooltip": false
+        "tooltip-format": "{:%Y-%m-%d %H:%M:%S}",
+        "tooltip": true
     },
 
     "niri/workspaces": {
@@ -38,42 +40,44 @@
         "tooltip": false
     },
 
-    "battery": {
-        "bat": "battery",
-        "format": "{icon}  {capacity}%",
-        "format-icons": ["\uf244", "\uf243", "\uf242", "\uf241", "\uf240"],
-        "format-charging": "\u26a1 {capacity}%",
-        "interval": 30,
-        "states": {
-            "good": 50,
-            "warning": 20,
-            "critical": 10
-        },
+    "cpu": {
+        "format": "\uf2db {usage}%",
+        "interval": 5,
+        "tooltip": true,
+        "tooltip-format": "CPU: {usage}% ({load} load avg)"
+    },
+
+    "memory": {
+        "format": "\uf538 {percentage}%",
+        "interval": 10,
+        "tooltip": true,
+        "tooltip-format": "RAM: {used:0.1f}G / {total:0.1f}G"
+    },
+
+    "custom/netspeed": {
+        "exec": "/etc/waybar/scripts/netspeed.sh",
+        "format": "{}",
+        "interval": 2,
         "tooltip": false
     },
 
     "backlight": {
-        "device": "panel0-backlight",
         "format": "\u2600 {percent}%",
+        "on-scroll-up": "brightnessctl set +5%",
+        "on-scroll-down": "brightnessctl set 5%-",
         "tooltip": false
     },
 
     "pulseaudio": {
-        "format": "{icon}  {volume}%",
-        "format-muted": "\uf6a9",
+        "format": "{icon} {volume}%",
+        "format-muted": "\uf6a9 muted",
         "format-icons": {
             "default": ["\uf026", "\uf027", "\uf028"]
         },
         "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
-        "tooltip": false
-    },
-
-    "custom/wifi": {
-        "exec": "iw dev wlan0 link 2>/dev/null | awk '/SSID/{print $2}' | head -1 | xargs -I{} printf '\uf1eb %s' '{}' || printf '\uf1eb Off'",
-        "exec-if": "test -d /sys/class/net/wlan0",
-        "format": "{}",
-        "interval": 10,
-        "tooltip": false
+        "scroll-step": 2,
+        "tooltip": true,
+        "tooltip-format": "{desc}: {volume}%"
     },
 
     "custom/apps": {
