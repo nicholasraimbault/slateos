@@ -1,7 +1,7 @@
-/// Magnification math for Shoal's dock icons.
-///
-/// Implements the macOS-style Gaussian magnification effect: icons near the
-/// touch/cursor position scale up smoothly, falling off with distance.
+//! Magnification math for Shoal's dock icons.
+//!
+//! Implements the macOS-style Gaussian magnification effect: icons near the
+//! touch/cursor position scale up smoothly, falling off with distance.
 
 /// Calculate the visual scale factor for each icon given a touch position.
 ///

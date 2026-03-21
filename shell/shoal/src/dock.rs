@@ -63,7 +63,7 @@ pub fn build_dock_icons(
     let mut dynamic_icons: Vec<DockIcon> = running
         .iter()
         .filter(|r| !pinned.iter().any(|p| app_ids_match(&r.app_id, p)))
-        .filter_map(|r| {
+        .map(|r| {
             // Try to find a desktop entry for this running app
             let entry = all_entries
                 .iter()
@@ -76,12 +76,12 @@ pub fn build_dock_icons(
                     desktop_id: r.app_id.clone(),
                 });
 
-            Some(DockIcon {
+            DockIcon {
                 entry,
                 is_running: true,
                 is_focused: r.is_focused,
                 scale: 1.0,
-            })
+            }
         })
         .collect();
 
