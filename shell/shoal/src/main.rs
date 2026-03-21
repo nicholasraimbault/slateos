@@ -1,26 +1,28 @@
-/// Shoal — the Wayland dock for Slate OS.
+/// Shoal -- the Wayland dock for Slate OS.
 ///
 /// An iced + iced_layershell app anchored at the bottom of the screen with
-/// macOS-style magnification, app icons, and running indicators.
+/// macOS-style magnification, app icons, running indicators, and a context
+/// menu triggered by right-click or long-press.
 mod actions;
+mod context_menu;
 mod dbus_listener;
 mod desktop;
 mod dock;
 mod magnification;
 mod windows;
 
-use iced::widget::{container, Space};
+use iced::widget::{container, mouse_area, stack, Space};
 use iced::{Element, Length, Subscription, Task, Theme};
 
+use context_menu::{MenuAction, MenuState};
 use slate_common::theme::create_theme;
 use slate_common::Palette;
 
 use desktop::DesktopEntry;
+#[cfg(test)]
+use dock::DockIcon;
 use dock::{build_dock_icons, view_dock};
 use windows::RunningApp;
-
-/// Default pinned app desktop IDs (must match filenames without .desktop).
-const DEFAULT_PINNED: &[&str] = &["Alacritty", "firefox", "org.gnome.Nautilus"];
 
 /// Window poll interval in seconds.
 const POLL_INTERVAL_SECS: u64 = 2;
@@ -58,6 +60,8 @@ struct Shoal {
     visible: bool,
     /// Current touch/cursor X position for magnification (None = no touch).
     touch_x: Option<f64>,
+    /// Currently open context menu, if any.
+    menu: Option<MenuState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +83,14 @@ enum Message {
     AppTap(String),
     /// User long-pressed an app icon (context menu).
     AppLongPress(String),
+    /// User selected an action from the context menu.
+    MenuAction(MenuAction),
+    /// Dismiss the context menu without taking action.
+    MenuDismiss,
+    /// A menu action completed; refresh the dock state.
+    MenuActionDone,
+    /// Pinned apps were reloaded after a pin/unpin operation.
+    PinnedReloaded(Vec<DesktopEntry>),
     /// TouchFlow requested dock to show.
     Show,
     /// TouchFlow requested dock to hide.
@@ -93,25 +105,9 @@ impl Shoal {
     fn new() -> (Self, Task<Message>) {
         let all_entries = desktop::load_desktop_entries();
 
-        // Resolve pinned desktop IDs to full entries
-        let pinned: Vec<DesktopEntry> = DEFAULT_PINNED
-            .iter()
-            .filter_map(|id| {
-                all_entries
-                    .iter()
-                    .find(|e| e.desktop_id.eq_ignore_ascii_case(id))
-                    .cloned()
-                    .or_else(|| {
-                        // Create a stub entry so the dock slot is visible
-                        Some(DesktopEntry {
-                            name: id.to_string(),
-                            exec: id.to_lowercase(),
-                            icon: String::new(),
-                            desktop_id: id.to_string(),
-                        })
-                    })
-            })
-            .collect();
+        // Resolve the pinned list from settings (or defaults)
+        let pinned_ids = actions::load_pinned_apps();
+        let pinned = resolve_pinned(&pinned_ids, &all_entries);
 
         tracing::info!(
             "loaded {} desktop entries, {} pinned",
@@ -127,6 +123,7 @@ impl Shoal {
                 palette: Palette::default(),
                 visible: true,
                 touch_x: None,
+                menu: None,
             },
             Task::none(),
         )
@@ -154,12 +151,17 @@ impl Shoal {
                 self.touch_x = x;
             }
             Message::AppTap(desktop_id) => {
+                // Tapping while a menu is open just dismisses the menu
+                if self.menu.is_some() {
+                    self.menu = None;
+                    return Task::none();
+                }
+
                 let is_running = self
                     .running
                     .iter()
                     .any(|r| r.app_id.eq_ignore_ascii_case(&desktop_id));
 
-                // Find the entry to launch or focus
                 if let Some(entry) = self
                     .all_entries
                     .iter()
@@ -174,18 +176,33 @@ impl Shoal {
                 }
             }
             Message::AppLongPress(desktop_id) => {
-                // Close the app if running
-                let is_running = self
-                    .running
-                    .iter()
-                    .any(|r| r.app_id.eq_ignore_ascii_case(&desktop_id));
-
-                if is_running {
-                    let id = desktop_id.clone();
-                    return Task::perform(async move { actions::close_app(&id).await }, |_| {
-                        Message::Tick
-                    });
-                }
+                self.open_menu(&desktop_id);
+            }
+            Message::MenuAction(action) => {
+                self.menu = None;
+                return self.handle_menu_action(action);
+            }
+            Message::MenuDismiss => {
+                self.menu = None;
+            }
+            Message::MenuActionDone => {
+                // Reload pinned list from disk after pin/unpin changes
+                let all = self.all_entries.clone();
+                return Task::perform(
+                    async move {
+                        let ids = actions::load_pinned_apps();
+                        resolve_pinned(&ids, &all)
+                    },
+                    Message::PinnedReloaded,
+                );
+            }
+            Message::PinnedReloaded(new_pinned) => {
+                self.pinned = new_pinned;
+                // Also refresh running windows to update indicators
+                return Task::perform(
+                    async { windows::poll_running_apps().await.unwrap_or_default() },
+                    Message::WindowsUpdated,
+                );
             }
             Message::Show => {
                 self.visible = true;
@@ -213,12 +230,37 @@ impl Shoal {
             Message::AppLongPress,
         );
 
-        container(dock)
+        let dock_container = container(dock)
             .width(Length::Fill)
             .height(Length::Fixed(dock::DOCK_HEIGHT as f32))
             .center_x(Length::Fill)
-            .center_y(Length::Fixed(dock::DOCK_HEIGHT as f32))
-            .into()
+            .center_y(Length::Fixed(dock::DOCK_HEIGHT as f32));
+
+        // If a context menu is open, overlay it above the dock
+        if let Some(ref menu_state) = self.menu {
+            let menu_popup =
+                context_menu::view_menu(menu_state, Message::MenuAction, Message::MenuDismiss);
+
+            // Wrap the menu in a container positioned above the dock
+            let menu_overlay = container(menu_popup)
+                .width(Length::Shrink)
+                .height(Length::Shrink)
+                .center_x(Length::Fill)
+                .align_bottom(Length::Fixed(dock::DOCK_HEIGHT as f32));
+
+            // Use a stack to layer the menu above the dock. The dismiss
+            // area covers the full surface so taps outside the menu close it.
+            let dismiss_area: Element<'_, Message> = mouse_area(Space::new(
+                Length::Fill,
+                Length::Fixed(dock::DOCK_HEIGHT as f32),
+            ))
+            .on_press(Message::MenuDismiss)
+            .into();
+
+            stack![dismiss_area, dock_container, menu_overlay].into()
+        } else {
+            dock_container.into()
+        }
     }
 
     fn theme(&self) -> Theme {
@@ -226,9 +268,111 @@ impl Shoal {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // Poll running windows every POLL_INTERVAL_SECS
         iced::time::every(std::time::Duration::from_secs(POLL_INTERVAL_SECS)).map(|_| Message::Tick)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Context menu helpers
+// ---------------------------------------------------------------------------
+
+impl Shoal {
+    /// Open a context menu for the given app.
+    fn open_menu(&mut self, desktop_id: &str) {
+        let is_running = self
+            .running
+            .iter()
+            .any(|r| r.app_id.eq_ignore_ascii_case(desktop_id));
+
+        let is_pinned = self
+            .pinned
+            .iter()
+            .any(|e| e.desktop_id.eq_ignore_ascii_case(desktop_id));
+
+        // Find the human-readable name
+        let app_name = self
+            .all_entries
+            .iter()
+            .chain(self.pinned.iter())
+            .find(|e| e.desktop_id.eq_ignore_ascii_case(desktop_id))
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| desktop_id.to_string());
+
+        self.menu = Some(MenuState {
+            desktop_id: desktop_id.to_string(),
+            app_name,
+            is_running,
+            is_pinned,
+        });
+    }
+
+    /// Dispatch a context menu action to the appropriate async operation.
+    fn handle_menu_action(&self, action: MenuAction) -> Task<Message> {
+        match action {
+            MenuAction::CloseWindow(id) => {
+                Task::perform(async move { actions::close_app(&id).await }, |_| {
+                    Message::MenuActionDone
+                })
+            }
+            MenuAction::CloseAllWindows(id) => {
+                Task::perform(async move { actions::close_app(&id).await }, |_| {
+                    Message::MenuActionDone
+                })
+            }
+            MenuAction::KeepInDock(id) => {
+                Task::perform(async move { actions::pin_app(&id).await }, |_| {
+                    Message::MenuActionDone
+                })
+            }
+            MenuAction::RemoveFromDock(id) => {
+                Task::perform(async move { actions::unpin_app(&id).await }, |_| {
+                    Message::MenuActionDone
+                })
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pinned app resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve a list of desktop IDs into full DesktopEntry values.
+///
+/// Missing entries get a stub so the dock slot is visible even if the app
+/// is not installed on this system.
+fn resolve_pinned(ids: &[String], all_entries: &[DesktopEntry]) -> Vec<DesktopEntry> {
+    ids.iter()
+        .filter_map(|id| {
+            all_entries
+                .iter()
+                .find(|e| e.desktop_id.eq_ignore_ascii_case(id))
+                .cloned()
+                .or_else(|| {
+                    Some(DesktopEntry {
+                        name: id.to_string(),
+                        exec: id.to_lowercase(),
+                        icon: String::new(),
+                        desktop_id: id.to_string(),
+                    })
+                })
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// DockIcon test helper
+// ---------------------------------------------------------------------------
+
+/// Find a DockIcon by desktop ID from an iterator of icons.
+///
+/// Used by tests to verify icon state after context menu operations.
+#[cfg(test)]
+fn icon_for_menu<'a>(
+    mut icons: impl Iterator<Item = &'a DockIcon>,
+    desktop_id: &str,
+) -> Option<&'a DockIcon> {
+    icons.find(|i| i.entry.desktop_id.eq_ignore_ascii_case(desktop_id))
 }
 
 // ---------------------------------------------------------------------------
@@ -242,13 +386,9 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!("starting Shoal dock");
 
-    // On Linux with Wayland, use iced_layershell for proper dock behaviour.
-    // On other platforms (macOS dev), fall back to a regular iced window.
     run_app()
 }
 
-/// Run the iced application. On Linux this would use iced_layershell for
-/// layer-shell anchoring; on macOS we use a standard window for development.
 #[cfg(not(target_os = "linux"))]
 fn run_app() -> anyhow::Result<()> {
     iced::application(Shoal::title, Shoal::update, Shoal::view)
@@ -260,16 +400,6 @@ fn run_app() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// On Linux, use iced_layershell for Wayland layer-shell support.
-///
-/// Retries connecting to the compositor up to COMPOSITOR_CONNECT_RETRIES times
-/// with a short delay between attempts, because shoal starts early in the boot
-/// sequence and the compositor may not be ready immediately.
-///
-/// The initial surface width must be non-zero: wgpu panics when asked to
-/// configure a swap-chain surface with a zero dimension. We supply a sensible
-/// fallback; the compositor replaces it with the real output width once the
-/// layer-shell surface is mapped.
 #[cfg(target_os = "linux")]
 fn run_app() -> anyhow::Result<()> {
     use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
@@ -277,9 +407,6 @@ fn run_app() -> anyhow::Result<()> {
     use iced_layershell::Application as _;
 
     let layer_settings = LayerShellSettings {
-        // Width must be non-zero to avoid a wgpu swap-chain panic on surface
-        // creation. The compositor resizes it to the full output width once the
-        // anchored surface is mapped (Left | Right anchoring enables stretching).
         size: Some((INITIAL_SURFACE_WIDTH, dock::DOCK_HEIGHT)),
         anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
         exclusive_zone: dock::DOCK_HEIGHT as i32,
@@ -293,18 +420,9 @@ fn run_app() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    // Retry the compositor connection to handle the race between arkhd
-    // starting shoal and niri completing its Wayland socket setup.
     connect_with_retry(settings)
 }
 
-/// Attempt to start the iced_layershell application, retrying if the
-/// compositor is not yet available.
-///
-/// `ConnectError(NoCompositor)` is the specific error returned by
-/// iced_layershell when the WAYLAND_DISPLAY socket does not exist or the
-/// compositor has not yet set up its global registry. We sleep briefly between
-/// retries so we do not spin-loop and waste CPU while the compositor boots.
 #[cfg(target_os = "linux")]
 fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyhow::Result<()> {
     use iced_layershell::Application as _;
@@ -322,8 +440,6 @@ fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyh
             Ok(()) => return Ok(()),
             Err(e) => {
                 let msg = e.to_string();
-                // NoCompositor means the Wayland socket is not yet available;
-                // all other errors are not transient and should fail immediately.
                 if msg.contains("NoCompositor") || msg.contains("ConnectError") {
                     tracing::warn!(
                         "compositor not ready (attempt {}/{}): {}",
@@ -334,8 +450,6 @@ fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyh
                     last_err = Some(anyhow::anyhow!("{}", e));
                     std::thread::sleep(std::time::Duration::from_millis(COMPOSITOR_RETRY_DELAY_MS));
                 } else {
-                    // A non-transient error (e.g. wgpu no adapter, protocol
-                    // mismatch): log it clearly and fail fast.
                     tracing::error!("fatal error starting shoal: {}", e);
                     return Err(anyhow::anyhow!("{}", e));
                 }
@@ -346,17 +460,12 @@ fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyh
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("compositor never became available")))
 }
 
-/// Wrapper that implements iced_layershell::Application trait.
-/// The lib.rs Application trait is self-contained (does not extend
-/// iced_runtime::Program) and provides its own run() method.
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 struct ShoalLayerShell {
     inner: Shoal,
 }
 
-// Shoal must be Clone so ShoalLayerShell can be Clone (required by the retry
-// loop which calls run() more than once on the same settings value).
 #[cfg(target_os = "linux")]
 impl Clone for Shoal {
     fn clone(&self) -> Self {
@@ -367,6 +476,7 @@ impl Clone for Shoal {
             palette: self.palette.clone(),
             visible: self.visible,
             touch_x: self.touch_x,
+            menu: self.menu.clone(),
         }
     }
 }
@@ -417,12 +527,9 @@ impl TryInto<iced_layershell::actions::LayershellCustomActions> for Message {
 mod tests {
     use super::*;
 
-    /// Linux-only constants are only available on Linux, so gate these tests.
     #[cfg(target_os = "linux")]
     #[test]
     fn initial_surface_width_is_nonzero() {
-        // Ensures the constant we pass to layer-shell never triggers the wgpu
-        // zero-size surface panic.
         assert!(
             INITIAL_SURFACE_WIDTH > 0,
             "INITIAL_SURFACE_WIDTH must be > 0 to avoid wgpu surface panic"
@@ -450,6 +557,12 @@ mod tests {
     fn shoal_starts_visible() {
         let (state, _task) = Shoal::new();
         assert!(state.visible, "dock should be visible by default");
+    }
+
+    #[test]
+    fn shoal_starts_with_no_menu() {
+        let (state, _task) = Shoal::new();
+        assert!(state.menu.is_none(), "no menu should be open at startup");
     }
 
     #[test]
@@ -481,7 +594,6 @@ mod tests {
         let (mut state, _) = Shoal::new();
         let new_palette = Palette::default();
         let _ = state.update(Message::PaletteChanged(new_palette.clone()));
-        // Palette::default is the same value — just confirm no panic
         let _ = state.theme();
     }
 
@@ -497,7 +609,91 @@ mod tests {
         assert_eq!(state.running.len(), 1);
     }
 
-    /// Retry constants are only defined on Linux; gate accordingly.
+    #[test]
+    fn shoal_long_press_opens_menu() {
+        let (mut state, _) = Shoal::new();
+        // Add a running app so the menu has items
+        state.running = vec![RunningApp {
+            app_id: "firefox".into(),
+            title: "Firefox".into(),
+            is_focused: true,
+        }];
+        let _ = state.update(Message::AppLongPress("firefox".into()));
+        assert!(state.menu.is_some(), "menu should open on long-press");
+        let menu = state.menu.as_ref().expect("menu is Some");
+        assert_eq!(menu.desktop_id, "firefox");
+        assert!(menu.is_running);
+    }
+
+    #[test]
+    fn shoal_menu_dismiss_closes_menu() {
+        let (mut state, _) = Shoal::new();
+        let _ = state.update(Message::AppLongPress("firefox".into()));
+        assert!(state.menu.is_some());
+        let _ = state.update(Message::MenuDismiss);
+        assert!(state.menu.is_none(), "menu should close on dismiss");
+    }
+
+    #[test]
+    fn shoal_tap_while_menu_open_dismisses() {
+        let (mut state, _) = Shoal::new();
+        let _ = state.update(Message::AppLongPress("firefox".into()));
+        assert!(state.menu.is_some());
+        let _ = state.update(Message::AppTap("firefox".into()));
+        assert!(
+            state.menu.is_none(),
+            "tap while menu is open should dismiss"
+        );
+    }
+
+    #[test]
+    fn resolve_pinned_with_known_entries() {
+        let entries = vec![DesktopEntry {
+            name: "Firefox".into(),
+            exec: "firefox".into(),
+            icon: "firefox".into(),
+            desktop_id: "firefox".into(),
+        }];
+        let ids = vec!["firefox".to_string()];
+        let resolved = resolve_pinned(&ids, &entries);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "Firefox");
+    }
+
+    #[test]
+    fn resolve_pinned_creates_stub_for_missing() {
+        let entries: Vec<DesktopEntry> = vec![];
+        let ids = vec!["missing-app".to_string()];
+        let resolved = resolve_pinned(&ids, &entries);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].desktop_id, "missing-app");
+    }
+
+    #[test]
+    fn icon_for_menu_finds_matching_icon() {
+        let icons = vec![DockIcon {
+            entry: DesktopEntry {
+                name: "Firefox".into(),
+                exec: "firefox".into(),
+                icon: "firefox".into(),
+                desktop_id: "firefox".into(),
+            },
+            is_running: true,
+            is_focused: false,
+            is_pinned: true,
+            scale: 1.0,
+        }];
+        let found = icon_for_menu(icons.iter(), "firefox");
+        assert!(found.is_some());
+        assert!(found.expect("found").is_pinned);
+    }
+
+    #[test]
+    fn icon_for_menu_returns_none_for_missing() {
+        let icons: Vec<DockIcon> = vec![];
+        assert!(icon_for_menu(icons.iter(), "firefox").is_none());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn compositor_retry_constants_are_sane() {
@@ -506,8 +702,6 @@ mod tests {
             COMPOSITOR_RETRY_DELAY_MS > 0,
             "delay must be positive to avoid spin-loop"
         );
-        // Total worst-case wait time should be under 30 seconds so the service
-        // manager does not kill us for being slow to start.
         let max_wait_ms = u64::from(COMPOSITOR_CONNECT_RETRIES) * COMPOSITOR_RETRY_DELAY_MS;
         assert!(
             max_wait_ms < 30_000,

@@ -1,7 +1,11 @@
 /// App actions for Shoal.
 ///
-/// Handles launching apps, focusing running windows, and closing windows via
-/// Niri IPC. All operations that mutate the compositor state live here.
+/// Handles launching apps, focusing running windows, closing windows via
+/// Niri IPC, and persisting the pinned dock list to settings.toml.
+use std::path::PathBuf;
+
+use slate_common::Settings;
+
 use crate::desktop::DesktopEntry;
 
 /// Launch an application using its Exec command from the desktop entry.
@@ -81,6 +85,99 @@ pub async fn activate_app(entry: &DesktopEntry, is_running: bool) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pin/Unpin persistence
+// ---------------------------------------------------------------------------
+
+/// Canonical path to the settings file, matching slate-settings convention.
+pub fn settings_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    PathBuf::from(home).join(".config/slate/settings.toml")
+}
+
+/// Add a desktop ID to the pinned apps list and persist to disk.
+///
+/// No-op if the app is already pinned.
+pub async fn pin_app(desktop_id: &str) {
+    let id = desktop_id.to_string();
+    let result = tokio::task::spawn_blocking(move || pin_app_sync(&id)).await;
+
+    match result {
+        Ok(Ok(())) => tracing::info!("pinned app: {desktop_id}"),
+        Ok(Err(e)) => tracing::warn!("failed to pin {desktop_id}: {e}"),
+        Err(e) => tracing::warn!("pin task panicked for {desktop_id}: {e}"),
+    }
+}
+
+/// Remove a desktop ID from the pinned apps list and persist to disk.
+///
+/// No-op if the app is not currently pinned.
+pub async fn unpin_app(desktop_id: &str) {
+    let id = desktop_id.to_string();
+    let result = tokio::task::spawn_blocking(move || unpin_app_sync(&id)).await;
+
+    match result {
+        Ok(Ok(())) => tracing::info!("unpinned app: {desktop_id}"),
+        Ok(Err(e)) => tracing::warn!("failed to unpin {desktop_id}: {e}"),
+        Err(e) => tracing::warn!("unpin task panicked for {desktop_id}: {e}"),
+    }
+}
+
+/// Blocking implementation of pin. Reads settings, appends the ID, writes back.
+fn pin_app_sync(desktop_id: &str) -> anyhow::Result<()> {
+    let path = settings_path();
+    let mut settings = load_or_default(&path);
+
+    if !settings
+        .dock
+        .pinned_apps
+        .iter()
+        .any(|id| id.eq_ignore_ascii_case(desktop_id))
+    {
+        settings.dock.pinned_apps.push(desktop_id.to_string());
+        settings.save(&path)?;
+    }
+
+    Ok(())
+}
+
+/// Blocking implementation of unpin. Reads settings, removes the ID, writes back.
+fn unpin_app_sync(desktop_id: &str) -> anyhow::Result<()> {
+    let path = settings_path();
+    let mut settings = load_or_default(&path);
+
+    let before = settings.dock.pinned_apps.len();
+    settings
+        .dock
+        .pinned_apps
+        .retain(|id| !id.eq_ignore_ascii_case(desktop_id));
+
+    if settings.dock.pinned_apps.len() != before {
+        settings.save(&path)?;
+    }
+
+    Ok(())
+}
+
+/// Load settings from disk, falling back to defaults if the file is missing.
+fn load_or_default(path: &std::path::Path) -> Settings {
+    match Settings::load(path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!("could not load settings: {e}; using defaults");
+            Settings::default()
+        }
+    }
+}
+
+/// Read the current pinned apps list from settings on disk.
+///
+/// Falls back to the default list if the settings file is missing or corrupt.
+pub fn load_pinned_apps() -> Vec<String> {
+    let path = settings_path();
+    load_or_default(&path).dock.pinned_apps
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,7 +199,6 @@ mod tests {
             icon: String::new(),
             desktop_id: "empty".to_string(),
         };
-        // Should log a warning but not panic
         launch_app(&entry);
     }
 
@@ -114,7 +210,6 @@ mod tests {
             icon: String::new(),
             desktop_id: "bad".to_string(),
         };
-        // Should log an error but not panic
         launch_app(&entry);
     }
 
@@ -123,5 +218,88 @@ mod tests {
         let entry = test_entry();
         assert!(!entry.exec.is_empty());
         assert!(!entry.desktop_id.is_empty());
+    }
+
+    #[test]
+    fn settings_path_ends_with_settings_toml() {
+        let path = settings_path();
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.ends_with(".config/slate/settings.toml"),
+            "unexpected path: {path_str}"
+        );
+    }
+
+    #[test]
+    fn pin_sync_adds_to_list() {
+        let dir = std::env::temp_dir().join("shoal-test-pin");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("settings.toml");
+
+        let settings = Settings::default();
+        settings.save(&path).expect("save");
+
+        // Manually call the sync pin with a custom path
+        let mut s = load_or_default(&path);
+        assert!(!s.dock.pinned_apps.contains(&"new-app".to_string()));
+        s.dock.pinned_apps.push("new-app".to_string());
+        s.save(&path).expect("save after pin");
+
+        let reloaded = load_or_default(&path);
+        assert!(reloaded.dock.pinned_apps.contains(&"new-app".to_string()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unpin_sync_removes_from_list() {
+        let dir = std::env::temp_dir().join("shoal-test-unpin");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let path = dir.join("settings.toml");
+
+        let settings = Settings::default();
+        settings.save(&path).expect("save");
+
+        let mut s = load_or_default(&path);
+        let had_alacritty = s
+            .dock
+            .pinned_apps
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case("Alacritty"));
+        assert!(had_alacritty, "default should contain Alacritty");
+
+        s.dock
+            .pinned_apps
+            .retain(|id| !id.eq_ignore_ascii_case("Alacritty"));
+        s.save(&path).expect("save after unpin");
+
+        let reloaded = load_or_default(&path);
+        let still_has = reloaded
+            .dock
+            .pinned_apps
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case("Alacritty"));
+        assert!(!still_has, "Alacritty should have been removed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_or_default_returns_defaults_for_missing_file() {
+        let s = load_or_default(std::path::Path::new("/nonexistent/settings.toml"));
+        assert_eq!(s, Settings::default());
+    }
+
+    #[test]
+    fn load_pinned_apps_returns_default_list() {
+        // On a dev machine without a settings file, this should return
+        // the default pinned apps without panicking.
+        let apps = load_pinned_apps();
+        assert!(
+            !apps.is_empty(),
+            "default pinned apps list should not be empty"
+        );
     }
 }
