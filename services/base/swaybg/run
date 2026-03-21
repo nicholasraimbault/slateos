@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/swaybg -i /usr/share/backgrounds/slate-default.jpg -m fill

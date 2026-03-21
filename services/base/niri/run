@@ -1,0 +1,4 @@
+#!/bin/sh
+# Start readiness watcher in background
+/etc/sv/niri/ready-check &
+exec /usr/bin/niri --session

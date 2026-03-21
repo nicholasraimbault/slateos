@@ -1,0 +1,13 @@
+#!/bin/sh
+# Find power button evdev
+for dev in /sys/class/input/event*/device/name; do
+    name=$(cat "$dev" 2>/dev/null)
+    case "$name" in *Power*|*qpnp_pon*)
+        evdev=/dev/input/$(basename $(dirname $(dirname "$dev")))
+        break ;;
+    esac
+done
+[ -z "$evdev" ] && exit 1
+# TODO: slate-power-monitor binary (reads evdev, classifies press duration,
+# writes /sys/power/state for suspend or signals supervisor for poweroff)
+exec /usr/bin/slate-power-monitor "$evdev"

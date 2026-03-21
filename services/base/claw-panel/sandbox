@@ -1,0 +1,4 @@
+read = /usr, /lib, /etc
+write = /tmp
+exec = /usr/bin/claw-panel
+connect = 18789

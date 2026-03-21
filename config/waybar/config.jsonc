@@ -1,0 +1,95 @@
+{
+    "layer": "top",
+    "position": "top",
+    "height": 30,
+    "spacing": 4,
+    "margin-top": 0,
+    "margin-left": 0,
+    "margin-right": 0,
+
+    "modules-left": [
+        "custom/apps",
+        "clock"
+    ],
+
+    "modules-center": [
+        "niri/workspaces"
+    ],
+
+    "modules-right": [
+        "custom/keyboard",
+        "battery",
+        "backlight",
+        "custom/wifi",
+        "custom/power"
+    ],
+
+    // --- Left ---
+
+    "clock": {
+        "format": "{:%H:%M  %a %b %d}",
+        "tooltip": false
+    },
+
+    // --- Center ---
+
+    "niri/workspaces": {
+        "format": "{icon}",
+        "format-icons": {
+            "active": "●",
+            "default": "○"
+        },
+        "tooltip": false
+    },
+
+    // --- Right ---
+
+    "battery": {
+        // Android exposes "battery", not "BAT0"
+        "bat": "battery",
+        "format": "{icon} {capacity}%",
+        "format-icons": ["", "", "", "", ""],
+        "format-charging": "⚡ {capacity}%",
+        "interval": 30,
+        "states": {
+            "good": 50,
+            "warning": 20,
+            "critical": 10
+        },
+        "tooltip": false
+    },
+
+    "backlight": {
+        // ONN 11 Tablet Pro panel backlight
+        "device": "panel0-backlight",
+        "format": "☀ {percent}%",
+        "tooltip": false
+    },
+
+    "custom/wifi": {
+        "exec": "cat /proc/net/wireless 2>/dev/null | tail -1 | awk '{print $1}' | tr -d ':' | xargs -I{} echo ' WiFi' || echo ' No WiFi'",
+        "exec-if": "cat /proc/net/wireless 2>/dev/null | grep -q wlan",
+        "format": "{}",
+        "format-alt": " No WiFi",
+        "interval": 10,
+        "tooltip": false
+    },
+
+    "custom/keyboard": {
+        "format": "⌨",
+        "on-click": "if [ -f /tmp/.wvkbd-visible ]; then pkill -USR1 wvkbd; rm /tmp/.wvkbd-visible; else pkill -USR2 wvkbd; touch /tmp/.wvkbd-visible; fi",
+        "tooltip": false
+    },
+
+    "custom/apps": {
+        "format": "☰",
+        "on-click": "fuzzel",
+        "tooltip": false
+    },
+
+    "custom/power": {
+        "format": "⏻",
+        "on-click": "niri msg action quit",
+        "tooltip": false
+    }
+}

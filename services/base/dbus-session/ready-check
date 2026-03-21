@@ -1,0 +1,7 @@
+#!/bin/sh
+# Wait for session bus socket then signal readiness
+for i in $(seq 1 50); do
+    [ -S /run/user/0/bus ] && break
+    sleep 0.1
+done
+touch /run/ready/dbus-session

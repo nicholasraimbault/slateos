@@ -1,0 +1,2 @@
+read = /usr, /lib, /etc, /usr/share/backgrounds
+exec = /usr/bin/swaybg

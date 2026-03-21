@@ -1,0 +1,5 @@
+read = /usr, /lib, /etc/dbus-1, /etc/machine-id
+write = /run/dbus
+exec = /usr/bin/dbus-daemon
+caps = setuid, setgid
+network-namespace = host

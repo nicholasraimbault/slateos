@@ -1,0 +1,4 @@
+read = /usr, /lib, /etc/pipewire, /proc, /sys/class/sound, /dev/snd
+write = /run/user/0, /tmp
+exec = /usr/bin/pipewire
+network-namespace = host

@@ -1,0 +1,144 @@
+// Slate OS — Niri Configuration
+// Target: ONN 11 Tablet Pro 2024 (1280x1840 @ 90Hz, DSI-1)
+// Display stack: DRM/KMS (legacy) + GBM + freedreno (KGSL)
+//
+// NOTE: On native boot, arkhe manages shell app lifecycle via slate-services/.
+// spawn-at-startup entries here are fallbacks for development without arkhe.
+
+output "DSI-1" {
+    mode "1280x1840@90.000"
+    // Panel is physically mounted 180° from DRM's assumed orientation
+    transform "180"
+    // Native 1280x1840 at 1.5x scale → 853x1227 logical pixels
+    scale 1.5
+}
+
+// Input
+input {
+    touch {
+        map-to-output "DSI-1"
+    }
+    // Touchpad gestures handled by TouchFlow, not Niri
+    touchpad {
+        tap
+        natural-scroll
+    }
+}
+
+// Layout — optimised for tablet: full-width windows, tight gaps
+layout {
+    gaps 8
+    center-focused-column "never"
+
+    border {
+        width 2
+        active-color "#6495ED"
+        inactive-color "#2A2A36"
+    }
+
+    // Tablet default: every window opens at full width
+    default-column-width { proportion 1.0; }
+
+    // Reserve space for Waybar (top) and wvkbd keyboard area hint (bottom)
+    struts {
+        top 30
+        bottom 48
+    }
+}
+
+// Animations — snappy spring physics tuned for touch responsiveness
+animations {
+    workspace-switch {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    horizontal-view-movement {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-open {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-close {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-resize {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+}
+
+// Audio — PipeWire must start before Wayland apps that produce sound
+spawn-at-startup "pipewire"
+spawn-at-startup "pipewire-pulse"
+spawn-at-startup "wireplumber"
+
+// Shell apps — spawned after Niri is ready (Wayland socket exists).
+// Missing binaries are logged and skipped, not fatal.
+spawn-at-startup "swaybg" "-i" "/usr/share/backgrounds/slate-default.jpg" "-m" "fill"
+spawn-at-startup "waybar"
+spawn-at-startup "slate-palette"
+spawn-at-startup "touchflow"
+spawn-at-startup "shoal"
+// wvkbd starts hidden, toggle with SIGUSR2 (show) / SIGUSR1 (hide) via waybar ⌨ button
+spawn-at-startup "wvkbd-slate" "--hidden"
+spawn-at-startup "slate-suggest"
+spawn-at-startup "slate-buttons"
+
+// Window rules — tablet-first: all apps open maximized
+window-rule {
+    match app-id="firefox"
+    default-column-width { proportion 1.0; }
+    open-maximized true
+}
+
+window-rule {
+    match app-id="Alacritty"
+    default-column-width { proportion 1.0; }
+}
+
+// Keyboard bindings (for attached keyboard)
+binds {
+    // Window management
+    Mod+Left  { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Up    { focus-window-up; }
+    Mod+Down  { focus-window-down; }
+
+    Mod+Shift+Left  { move-column-left; }
+    Mod+Shift+Right { move-column-right; }
+
+    Mod+F { maximize-column; }
+    Mod+Shift+F { fullscreen-window; }
+
+    // Workspaces
+    Mod+1 { focus-workspace 1; }
+    Mod+2 { focus-workspace 2; }
+    Mod+3 { focus-workspace 3; }
+
+    // Apps
+    Mod+Return { spawn "alacritty"; }
+    Mod+D { spawn "fuzzel"; }
+    Mod+B { spawn "firefox"; }
+
+    // Close
+    Mod+Q { close-window; }
+
+    // Overview
+    Mod+Tab { toggle-overview; }
+
+    // Session
+    Mod+Shift+E { quit; }
+
+    // Screenshots
+    Print { screenshot; }
+    Mod+Print { screenshot-window; }
+}
+
+// GPU optimization — direct scanout bypasses compositor for fullscreen apps
+debug {
+    enable-overlay-planes
+}
+
+// Cursor — hide on tablet to avoid phantom cursor
+cursor {
+    hide-when-typing
+    hide-after-inactive-ms 3000
+}

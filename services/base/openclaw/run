@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/openclaw serve --port 18789

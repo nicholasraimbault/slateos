@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "shell/slate-common",
+    "shell/touchflow",
+    "shell/shoal",
+    "shell/slate-launcher",
+    "shell/claw-panel",
+    "shell/slate-palette",
+    "shell/slate-suggest",
+    "shell/slate-settings",
+    "shell/slate-power",
+]
+
+[workspace.dependencies]
+# GUI
+iced = "0.13"
+iced_layershell = "0.7"
+iced_anim = "0.2"
+
+# Input
+evdev = "0.12"
+
+# System
+nix = { version = "0.31", features = ["mount", "kmod", "fs", "process", "signal", "reboot"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# D-Bus
+zbus = "5"
+
+# Config
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+# HTTP/WebSocket
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = "0.24"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# File watching
+notify = "7"

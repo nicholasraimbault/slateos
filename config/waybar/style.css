@@ -1,0 +1,92 @@
+/* Slate OS Waybar — Tablet-first dark theme */
+
+* {
+    font-family: "Inter", "Noto Sans", sans-serif;
+    font-size: 13px;
+    min-height: 0;
+}
+
+window#waybar {
+    background-color: #1a1a2e;
+    color: #e0e0e0;
+    border-bottom: 1px solid rgba(100, 149, 237, 0.3);
+}
+
+/* Touch targets: visual height 30px, padded clickable area for fingers */
+#clock,
+#workspaces button,
+#battery,
+#backlight,
+#network,
+#custom-power {
+    padding: 4px 10px;
+    margin: 0 2px;
+    border-radius: 8px;
+}
+
+/* --- Left: clock --- */
+
+#clock {
+    color: #e0e0e0;
+    font-weight: 600;
+}
+
+/* --- Center: workspace indicators --- */
+
+#workspaces button {
+    color: rgba(224, 224, 224, 0.5);
+    background: transparent;
+    border: none;
+    padding: 4px 6px;
+}
+
+#workspaces button.active {
+    color: #6495ED;
+    background-color: rgba(100, 149, 237, 0.15);
+}
+
+/* --- Right modules --- */
+
+#battery {
+    color: #66BB6A;
+}
+
+#battery.warning {
+    color: #FFA726;
+}
+
+#battery.critical {
+    color: #EF5350;
+}
+
+#backlight {
+    color: #e0e0e0;
+}
+
+#network {
+    color: #e0e0e0;
+}
+
+#custom-power {
+    color: #EF5350;
+    font-size: 15px;
+    padding: 4px 12px;
+}
+
+#custom-power:hover {
+    background-color: rgba(239, 83, 80, 0.15);
+}
+
+/* Hover/touch feedback */
+#clock:hover,
+#workspaces button:hover,
+#battery:hover,
+#backlight:hover,
+#network:hover {
+    background-color: rgba(100, 149, 237, 0.1);
+}
+
+/* Hide when Niri requests it */
+window#waybar.hidden {
+    opacity: 0;
+}

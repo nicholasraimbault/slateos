@@ -1,0 +1,5 @@
+read = /usr, /lib, /etc/NetworkManager, /etc/resolv.conf, /sys/class/net, /proc/net
+write = /var/lib/NetworkManager, /run/NetworkManager, /etc/resolv.conf, /run/ready
+exec = /usr/bin, /usr/sbin, /bin, /sbin
+network-namespace = host
+caps = net_admin, net_raw, dac_override

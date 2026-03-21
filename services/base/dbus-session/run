@@ -1,0 +1,5 @@
+#!/bin/sh
+mkdir -p /run/user/0
+# Start readiness watcher in background
+/etc/sv/dbus-session/ready-check &
+exec /usr/bin/dbus-daemon --session --nofork --address=unix:path=/run/user/0/bus

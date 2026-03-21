@@ -1,0 +1,7 @@
+#!/bin/sh
+# Wait for seatd socket then signal readiness
+for i in $(seq 1 50); do
+    [ -S /run/seatd.sock ] && break
+    sleep 0.1
+done
+touch /run/ready/seatd

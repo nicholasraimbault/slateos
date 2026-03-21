@@ -1,0 +1,5 @@
+read = /usr, /lib, /etc, /root/.config/openclaw
+write = /tmp
+exec = /usr/bin/openclaw
+bind = 18789
+connect = 443

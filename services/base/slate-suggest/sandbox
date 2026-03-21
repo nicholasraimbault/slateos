@@ -1,0 +1,3 @@
+read = /usr, /lib, /etc
+write = /tmp
+exec = /usr/bin/slate-suggest

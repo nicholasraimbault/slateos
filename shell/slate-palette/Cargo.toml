@@ -1,0 +1,19 @@
+[package]
+name = "slate-palette"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slate-common = { path = "../slate-common" }
+tokio = { workspace = true }
+zbus = { workspace = true }
+notify = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
