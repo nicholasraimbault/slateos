@@ -1,13 +1,15 @@
-/// Color extraction from wallpaper images via matugen.
+/// Color extraction from wallpaper images.
 ///
-/// Runs `matugen image <path> --mode dark --json` as a subprocess and parses
-/// the JSON output to produce a `Palette`. Falls back to the default palette
-/// when matugen is unavailable or fails.
+/// Tries matugen first (high-quality Material You extraction). If matugen is
+/// not installed or fails, falls back to a built-in pixel-sampling extractor
+/// that finds the dominant hue and generates a palette from it.
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use slate_common::Palette;
+
+use crate::builtin_extract;
 
 /// Parse a hex color string like `#aabbcc` into `[R, G, B, 255]`.
 fn hex_to_rgba(hex: &str) -> Result<[u8; 4]> {
@@ -54,11 +56,9 @@ pub fn parse_matugen_json(json_str: &str) -> Result<Palette> {
     })
 }
 
-/// Run matugen on `image_path` and return the extracted palette.
-///
-/// If matugen is not installed or fails, returns `Err`. The caller should
-/// fall back to the current/default palette and log the error.
-pub async fn extract_palette(image_path: &Path) -> Result<Palette> {
+/// Try to extract a palette using matugen. Returns `Err` if matugen is not
+/// installed or fails.
+async fn extract_via_matugen(image_path: &Path) -> Result<Palette> {
     let path_str = image_path
         .to_str()
         .context("wallpaper path is not valid UTF-8")?;
@@ -78,6 +78,29 @@ pub async fn extract_palette(image_path: &Path) -> Result<Palette> {
 
     let json_str = String::from_utf8(output.stdout).context("matugen output is not UTF-8")?;
     parse_matugen_json(&json_str)
+}
+
+/// Extract a palette from a wallpaper image.
+///
+/// Strategy:
+/// 1. Try matugen (highest-quality Material You extraction)
+/// 2. If matugen fails, use built-in pixel-sampling extractor
+///
+/// Only returns `Err` if both methods fail.
+pub async fn extract_palette(image_path: &Path) -> Result<Palette> {
+    match extract_via_matugen(image_path).await {
+        Ok(palette) => {
+            tracing::info!("extracted palette via matugen");
+            Ok(palette)
+        }
+        Err(matugen_err) => {
+            tracing::info!("matugen unavailable ({matugen_err:#}), trying built-in extractor");
+            let path = image_path.to_path_buf();
+            tokio::task::spawn_blocking(move || builtin_extract::extract_from_image(&path))
+                .await
+                .context("built-in extractor task panicked")?
+        }
+    }
 }
 
 #[cfg(test)]
