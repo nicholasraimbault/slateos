@@ -52,7 +52,11 @@ impl RecentApps {
         match std::fs::read_to_string(path) {
             Ok(content) => match toml::from_str::<RecentApps>(&content) {
                 Ok(recent) => {
-                    tracing::debug!("loaded {} recent apps from {}", recent.entries.len(), path.display());
+                    tracing::debug!(
+                        "loaded {} recent apps from {}",
+                        recent.entries.len(),
+                        path.display()
+                    );
                     recent
                 }
                 Err(err) => {
@@ -123,7 +127,10 @@ impl RecentApps {
 
     /// Build a set of recent desktop_ids for O(1) membership checks.
     pub fn recent_id_set(&self) -> HashMap<&str, ()> {
-        self.entries.iter().map(|e| (e.desktop_id.as_str(), ())).collect()
+        self.entries
+            .iter()
+            .map(|e| (e.desktop_id.as_str(), ()))
+            .collect()
     }
 }
 

@@ -122,10 +122,7 @@ fn read_service_dir(parent: &Path, source: ServiceSource) -> Result<Vec<ServiceI
             continue;
         }
 
-        let name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let name = entry.file_name().to_string_lossy().to_string();
 
         let info = parse_service(&path, name, source.clone());
         services.push(info);
@@ -349,10 +346,7 @@ mod tests {
     }
 
     fn tempdir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "slate-test-{}-{name}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("slate-test-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::create_dir_all(&dir);
         dir

@@ -8,6 +8,7 @@ use iced::{alignment, Color, Element, Length, Theme};
 
 use crate::context::WindowContext;
 use crate::conversation::{extract_code_blocks, ChatMessage, ChatRole, Conversation};
+use crate::toast::ToastState;
 
 /// Identifiers for iced widgets that need stable IDs.
 const INPUT_ID: &str = "claw-input";
@@ -43,13 +44,16 @@ pub fn view<'a>(
     context: &'a Option<WindowContext>,
     input_text: &'a str,
     is_streaming: bool,
+    toast_state: &'a ToastState,
+    surface_color: [u8; 4],
 ) -> Element<'a, PanelAction> {
     let header = view_header();
     let context_badge = view_context_badge(context);
     let messages = view_messages(conversation);
     let input_bar = view_input_bar(input_text, is_streaming);
+    let toast = crate::toast::view_toast(toast_state, surface_color);
 
-    column![header, context_badge, messages, input_bar]
+    column![header, context_badge, messages, toast, input_bar]
         .spacing(8)
         .padding(12)
         .width(Length::Fill)

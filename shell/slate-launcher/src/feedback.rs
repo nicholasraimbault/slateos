@@ -104,7 +104,10 @@ mod tests {
         let mut fb = LaunchFeedback::new();
         fb.trigger("firefox");
         let opacity = fb.opacity_for("firefox");
-        assert!(opacity < 1.0, "triggered app should be dimmed, got {opacity}");
+        assert!(
+            opacity < 1.0,
+            "triggered app should be dimmed, got {opacity}"
+        );
     }
 
     #[test]

@@ -97,8 +97,7 @@ impl CliConfig {
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
 
-        let contents = toml::to_string_pretty(self)
-            .context("failed to serialize config")?;
+        let contents = toml::to_string_pretty(self).context("failed to serialize config")?;
         std::fs::write(&path, contents)
             .with_context(|| format!("failed to write {}", path.display()))?;
 
@@ -161,17 +160,29 @@ fn print_config(config: &CliConfig, path: &std::path::Path) {
     println!("  file             : {}", path.display());
     println!(
         "  status           : {}",
-        if path.exists() { "loaded" } else { "defaults (no file)" }
+        if path.exists() {
+            "loaded"
+        } else {
+            "defaults (no file)"
+        }
     );
     println!();
     println!("  default_device   : {}", config.default_device);
     println!(
         "  cross_toolchain  : {}",
-        if config.cross_toolchain.is_empty() { "(not set)" } else { &config.cross_toolchain }
+        if config.cross_toolchain.is_empty() {
+            "(not set)"
+        } else {
+            &config.cross_toolchain
+        }
     );
     println!(
         "  rootfs_cache     : {}",
-        if config.rootfs_cache.is_empty() { "(not set)" } else { &config.rootfs_cache }
+        if config.rootfs_cache.is_empty() {
+            "(not set)"
+        } else {
+            &config.rootfs_cache
+        }
     );
     println!();
 }
@@ -233,8 +244,7 @@ mod tests {
 
     #[test]
     fn config_deserialize_partial_fills_defaults() {
-        let config: CliConfig =
-            toml::from_str("default_device = \"pixel-tablet\"").unwrap();
+        let config: CliConfig = toml::from_str("default_device = \"pixel-tablet\"").unwrap();
         assert_eq!(config.default_device, "pixel-tablet");
         assert!(config.cross_toolchain.is_empty());
     }
