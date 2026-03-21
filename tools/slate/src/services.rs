@@ -4,7 +4,7 @@
 /// service names, dependencies, sandbox modes, and environment variables.
 /// Useful for debugging the boot cascade and verifying service configs.
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -64,7 +64,7 @@ impl std::fmt::Display for ServiceSource {
 
 /// Execute `slate services`.
 pub fn run(args: ServicesArgs) -> Result<()> {
-    let repo_root = find_repo_root().context("could not find slateos repo root")?;
+    let repo_root = crate::workspace::find_repo_root().context("could not find slateos repo root")?;
     let services = discover_services(&repo_root, &args.device)?;
 
     if let Some(name) = &args.inspect {
@@ -278,19 +278,7 @@ fn read_env_dir(dir: &Path) -> BTreeMap<String, String> {
     env
 }
 
-/// Walk up from cwd to find the workspace root.
-fn find_repo_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        if dir.join("services").is_dir() && dir.join("Cargo.toml").exists() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
-}
+
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -348,7 +336,7 @@ mod tests {
         assert_eq!(device_dir_name(&Device::PixelTablet), "pixel-tablet");
     }
 
-    fn tempdir(name: &str) -> PathBuf {
+    fn tempdir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "slate-test-{}-{name}",
             std::process::id()

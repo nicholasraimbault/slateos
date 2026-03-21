@@ -69,7 +69,7 @@ impl CrateStatus {
 
 /// Execute `slate status`.
 pub fn run(args: StatusArgs) -> Result<()> {
-    let repo_root = find_repo_root();
+    let repo_root = crate::workspace::find_repo_root();
 
     println!();
     println!("  slate status");
@@ -137,25 +137,6 @@ fn print_build_hint(device: &Device, have_root: bool) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Walk up from cwd to find the workspace root (same logic as build.rs).
-fn find_repo_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let candidate = dir.join("Cargo.toml");
-        if candidate.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&candidate) {
-                if contents.contains("[workspace]") {
-                    return Some(dir);
-                }
-            }
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
-}
 
 fn out_dir(root: &std::path::Path, device: &Device, profile: &str) -> PathBuf {
     if device.needs_cross_compile() {

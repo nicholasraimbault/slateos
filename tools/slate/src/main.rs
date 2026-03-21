@@ -10,11 +10,13 @@
 ///   config  — print or edit the current slate CLI configuration
 ///   status  — show build state and available shell crates
 mod build;
+mod check;
 mod config;
 mod device;
 mod flash;
 mod services;
 mod status;
+mod workspace;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -56,6 +58,9 @@ enum Command {
 
     /// List and inspect arkhe service definitions.
     Services(services::ServicesArgs),
+
+    /// Run check + clippy + tests in one command.
+    Check(check::CheckArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -82,5 +87,6 @@ fn main() -> Result<()> {
         Command::Config(args) => config::run(args),
         Command::Status(args) => status::run(args),
         Command::Services(args) => services::run(args),
+        Command::Check(args) => check::run(args),
     }
 }

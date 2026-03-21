@@ -69,6 +69,11 @@ pub struct BuildArgs {
     /// Build profile.
     #[arg(short, long, default_value = "release")]
     pub profile: Profile,
+
+    /// Build only a specific crate (e.g. `shoal`, `touchflow`).
+    /// Omit to build the entire workspace.
+    #[arg(short, long)]
+    pub crate_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +99,7 @@ pub const SHELL_CRATES: &[&str] = &[
 
 /// Execute `slate build`.
 pub fn run(args: BuildArgs) -> Result<()> {
-    let repo_root = find_repo_root().context("could not find slateos repo root")?;
+    let repo_root = crate::workspace::find_repo_root().context("could not find slateos repo root")?;
 
     info!(
         device = %args.device,
@@ -130,30 +135,6 @@ pub fn run(args: BuildArgs) -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Walk up from the current directory to find the workspace root.
-///
-/// Identifies the root by the presence of `Cargo.toml` containing the
-/// `[workspace]` key, stopping at the filesystem root to avoid an infinite
-/// loop.
-fn find_repo_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let candidate = dir.join("Cargo.toml");
-        if candidate.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&candidate) {
-                if contents.contains("[workspace]") {
-                    debug!(root = %dir.display(), "found workspace root");
-                    return Some(dir);
-                }
-            }
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
-}
-
 /// Print a human-readable build header before invoking cargo.
 fn print_header(args: &BuildArgs) {
     println!();
@@ -162,7 +143,11 @@ fn print_header(args: &BuildArgs) {
     println!("  device  : {}", args.device);
     println!("  target  : {}", args.device.cargo_target());
     println!("  profile : {}", args.profile);
-    println!("  crates  : {} shell crates", SHELL_CRATES.len());
+    if let Some(name) = &args.crate_name {
+        println!("  crate   : {name}");
+    } else {
+        println!("  crates  : {} shell crates", SHELL_CRATES.len());
+    }
     println!();
 }
 
@@ -172,7 +157,13 @@ fn print_header(args: &BuildArgs) {
 /// live progress output.
 fn invoke_cargo(repo_root: &Path, args: &BuildArgs) -> Result<ExitStatus> {
     let mut cmd = Command::new("cargo");
-    cmd.arg("build").arg("--workspace");
+    cmd.arg("build");
+
+    if let Some(name) = &args.crate_name {
+        cmd.arg("-p").arg(name);
+    } else {
+        cmd.arg("--workspace");
+    }
 
     if let Some(flag) = args.profile.cargo_flag() {
         cmd.arg(flag);
@@ -279,6 +270,7 @@ mod tests {
         let args = BuildArgs {
             device: Device::GenericX86,
             profile: Profile::Release,
+            crate_name: None,
         };
         let dir = output_dir(&root, &args);
         assert_eq!(dir, PathBuf::from("/repo/target/release"));
@@ -290,6 +282,7 @@ mod tests {
         let args = BuildArgs {
             device: Device::PixelTablet,
             profile: Profile::Release,
+            crate_name: None,
         };
         let dir = output_dir(&root, &args);
         assert_eq!(
