@@ -3,6 +3,12 @@ name = "touchflow"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+# Enable pressure-sensitive touch tracking. Currently unused; will be needed
+# when force-touch gestures are implemented.
+pressure = []
+
 [dependencies]
 slate-common = { path = "../slate-common" }
 evdev = { workspace = true }

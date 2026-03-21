@@ -16,7 +16,7 @@ use crate::gesture::{GestureType, SwipeDirection};
 
 /// Abstraction over Niri IPC so dispatch logic can be tested without a
 /// running compositor.
-#[allow(async_fn_in_trait, dead_code)]
+#[allow(async_fn_in_trait)]
 pub trait NiriDispatch {
     async fn focus_column_left(&self) -> Result<()>;
     async fn focus_column_right(&self) -> Result<()>;
@@ -31,7 +31,7 @@ pub trait NiriDispatch {
 
 /// Abstraction over D-Bus emitter so dispatch logic can be tested without a
 /// running session bus.
-#[allow(async_fn_in_trait, dead_code)]
+#[allow(async_fn_in_trait)]
 pub trait EmitterDispatch {
     async fn show_dock(&self) -> Result<()>;
     async fn hide_dock(&self) -> Result<()>;
@@ -265,7 +265,6 @@ mod tests {
     // -- Mock Niri client --
 
     #[derive(Debug, Clone, PartialEq)]
-    #[allow(dead_code)]
     enum NiriCall {
         FocusColumnLeft,
         FocusColumnRight,

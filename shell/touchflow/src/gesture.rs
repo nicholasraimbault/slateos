@@ -60,7 +60,6 @@ pub enum SwipeDirection {
 
 /// The kind of gesture that was recognized.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // Pinch variant constructed by dispatch layer (Task 6)
 pub enum GestureType {
     Tap {
         fingers: u8,
@@ -89,25 +88,6 @@ pub enum GestureType {
         direction: SwipeDirection,
         velocity: f64,
     },
-}
-
-/// Current phase of the gesture state machine.
-///
-/// Exposed for downstream consumers (e.g. the dispatch layer) that may want
-/// to inspect the recognizer's phase. Not all variants are used internally
-/// yet — `Active` and `Completing` will be consumed by the animation/dispatch
-/// pipeline in Task 6.
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // Variants consumed by dispatch layer (Task 6)
-pub enum GestureState {
-    Idle,
-    Detecting {
-        start_time: Instant,
-        start_positions: Vec<(i32, i32)>,
-    },
-    Recognized(GestureType),
-    Active(GestureType),
-    Completing(GestureType),
 }
 
 // ---------------------------------------------------------------------------
@@ -550,18 +530,17 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::Swipe {
-                fingers,
-                direction,
-                velocity,
-            }) => {
-                assert_eq!(fingers, 1);
-                assert_eq!(direction, SwipeDirection::Right);
-                assert!(velocity > 0.0);
-            }
-            other => panic!("expected Swipe(Right), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::Swipe {
+                    fingers: 1,
+                    direction: SwipeDirection::Right,
+                    velocity,
+                }) if velocity > 0.0
+            ),
+            "expected Swipe(Right) with 1 finger and positive velocity, got {result:?}"
+        );
     }
 
     #[test]
@@ -586,12 +565,16 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::Swipe { direction, .. }) => {
-                assert_eq!(direction, SwipeDirection::Up);
-            }
-            other => panic!("expected Swipe(Up), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::Swipe {
+                    direction: SwipeDirection::Up,
+                    ..
+                })
+            ),
+            "expected Swipe(Up), got {result:?}"
+        );
     }
 
     #[test]
@@ -616,12 +599,16 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::Swipe { direction, .. }) => {
-                assert_eq!(direction, SwipeDirection::Left);
-            }
-            other => panic!("expected Swipe(Left), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::Swipe {
+                    direction: SwipeDirection::Left,
+                    ..
+                })
+            ),
+            "expected Swipe(Left), got {result:?}"
+        );
     }
 
     #[test]
@@ -646,12 +633,16 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::Swipe { direction, .. }) => {
-                assert_eq!(direction, SwipeDirection::Down);
-            }
-            other => panic!("expected Swipe(Down), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::Swipe {
+                    direction: SwipeDirection::Down,
+                    ..
+                })
+            ),
+            "expected Swipe(Down), got {result:?}"
+        );
     }
 
     // ---- Multi-finger ----
@@ -700,15 +691,17 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::Swipe {
-                fingers, direction, ..
-            }) => {
-                assert_eq!(fingers, 2);
-                assert_eq!(direction, SwipeDirection::Right);
-            }
-            other => panic!("expected 2-finger Swipe(Right), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::Swipe {
+                    fingers: 2,
+                    direction: SwipeDirection::Right,
+                    ..
+                })
+            ),
+            "expected 2-finger Swipe(Right), got {result:?}"
+        );
     }
 
     #[test]
@@ -747,15 +740,17 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::Swipe {
-                fingers, direction, ..
-            }) => {
-                assert_eq!(fingers, 3);
-                assert_eq!(direction, SwipeDirection::Up);
-            }
-            other => panic!("expected 3-finger Swipe(Up), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::Swipe {
+                    fingers: 3,
+                    direction: SwipeDirection::Up,
+                    ..
+                })
+            ),
+            "expected 3-finger Swipe(Up), got {result:?}"
+        );
     }
 
     // ---- Edge swipe ----
@@ -783,18 +778,17 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::EdgeSwipe {
-                edge,
-                direction,
-                velocity,
-            }) => {
-                assert_eq!(edge, Edge::Left);
-                assert_eq!(direction, SwipeDirection::Right);
-                assert!(velocity > 0.0);
-            }
-            other => panic!("expected EdgeSwipe(Left, Right), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::EdgeSwipe {
+                    edge: Edge::Left,
+                    direction: SwipeDirection::Right,
+                    velocity,
+                }) if velocity > 0.0
+            ),
+            "expected EdgeSwipe(Left, Right) with positive velocity, got {result:?}"
+        );
     }
 
     #[test]
@@ -820,15 +814,17 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
 
-        match result {
-            Some(GestureType::EdgeSwipe {
-                edge, direction, ..
-            }) => {
-                assert_eq!(edge, Edge::Bottom);
-                assert_eq!(direction, SwipeDirection::Up);
-            }
-            other => panic!("expected EdgeSwipe(Bottom, Up), got {other:?}"),
-        }
+        assert!(
+            matches!(
+                result,
+                Some(GestureType::EdgeSwipe {
+                    edge: Edge::Bottom,
+                    direction: SwipeDirection::Up,
+                    ..
+                })
+            ),
+            "expected EdgeSwipe(Bottom, Up), got {result:?}"
+        );
     }
 
     // ---- Gesture cancellation ----

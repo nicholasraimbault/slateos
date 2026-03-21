@@ -16,7 +16,6 @@ pub const MAX_SLOTS: usize = 10;
 
 /// State of a single MT slot (one finger).
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // pressure is read by the dispatch layer (Task 6)
 pub struct TouchSlot {
     /// Kernel tracking ID. -1 means inactive (finger up).
     pub tracking_id: i32,
@@ -24,7 +23,9 @@ pub struct TouchSlot {
     pub x: i32,
     /// Vertical coordinate in device units.
     pub y: i32,
-    /// Pressure (0 when not reported).
+    /// Pressure (0 when not reported). Gated behind the `pressure` feature
+    /// because force-touch gestures are not yet implemented.
+    #[cfg(feature = "pressure")]
     pub pressure: i32,
 }
 
@@ -34,6 +35,7 @@ impl Default for TouchSlot {
             tracking_id: -1,
             x: 0,
             y: 0,
+            #[cfg(feature = "pressure")]
             pressure: 0,
         }
     }
@@ -236,6 +238,7 @@ pub mod device {
                                         tracking_id: id,
                                         x,
                                         y,
+                                        #[cfg(feature = "pressure")]
                                         pressure: 0,
                                     };
                                     let _ = tx
