@@ -16,14 +16,12 @@ const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// Time window for tracking consecutive failures.
 const FAILURE_WINDOW_SECS: f64 = 10.0;
 
-#[allow(dead_code)] // Methods form the full public API; not all called yet.
 pub struct NiriClient {
     socket_path: PathBuf,
     consecutive_failures: AtomicU32,
     first_failure_time: Mutex<Option<Instant>>,
 }
 
-#[allow(dead_code)] // Full public API; not all methods called from dispatch yet.
 impl NiriClient {
     /// Create a new Niri IPC client.
     ///

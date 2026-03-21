@@ -47,11 +47,12 @@ impl MomentumTracker {
     /// Uses the first and last samples in the window. Returns `(0.0, 0.0)` if
     /// there are fewer than two samples or the time delta is zero.
     pub fn velocity_at_release(&self) -> (f64, f64) {
-        if self.history.len() < 2 {
+        // Need at least two samples to compute a finite difference.
+        let (Some(first), Some(last)) = (self.history.front(), self.history.back()) else {
             return (0.0, 0.0);
-        }
-        let (t0, x0, y0) = self.history.front().unwrap();
-        let (t1, x1, y1) = self.history.back().unwrap();
+        };
+        let (t0, x0, y0) = first;
+        let (t1, x1, y1) = last;
         let dt = t1.duration_since(*t0).as_secs_f64();
         if dt <= 0.0 {
             return (0.0, 0.0);

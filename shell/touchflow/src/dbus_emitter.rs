@@ -10,12 +10,10 @@ use zbus::Connection;
 use slate_common::dbus;
 
 /// Emitter that sends D-Bus signals / method calls to other Slate components.
-#[allow(dead_code)] // Methods form the full public API; not all called yet.
 pub struct TouchFlowEmitter {
     connection: Connection,
 }
 
-#[allow(dead_code)] // Full public API; not all methods called from dispatch yet.
 impl TouchFlowEmitter {
     /// Connect to the session bus.
     pub async fn new() -> Result<Self> {
@@ -120,7 +118,6 @@ pub mod mock {
     use anyhow::Result;
 
     #[derive(Debug, Clone, PartialEq)]
-    #[allow(dead_code)] // Variants form the full mock API; not all exercised in current tests.
     pub enum EmitterCall {
         ShowDock,
         HideDock,
@@ -135,7 +132,6 @@ pub mod mock {
         pub calls: Arc<Mutex<Vec<EmitterCall>>>,
     }
 
-    #[allow(dead_code)] // Full mock API; not all methods called in current tests.
     impl MockEmitter {
         pub fn new() -> Self {
             Self {
