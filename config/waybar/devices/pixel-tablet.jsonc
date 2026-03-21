@@ -1,8 +1,8 @@
 {
     "layer": "top",
     "position": "top",
-    "height": 30,
-    "spacing": 4,
+    "height": 40,
+    "spacing": 8,
     "margin-top": 0,
     "margin-left": 0,
     "margin-right": 0,
@@ -17,8 +17,10 @@
     ],
 
     "modules-right": [
+        "custom/keyboard",
         "backlight",
         "pulseaudio",
+        "bluetooth",
         "custom/wifi",
         "battery",
         "custom/power"
@@ -55,6 +57,8 @@
     "backlight": {
         "device": "panel0-backlight",
         "format": "\u2600 {percent}%",
+        "on-scroll-up": "brightnessctl set +5%",
+        "on-scroll-down": "brightnessctl set 5%-",
         "tooltip": false
     },
 
@@ -68,11 +72,25 @@
         "tooltip": false
     },
 
+    "bluetooth": {
+        "format": "\uf294",
+        "format-connected": "\uf294 {device_alias}",
+        "format-disabled": "",
+        "tooltip-format": "{status}",
+        "tooltip": false
+    },
+
     "custom/wifi": {
         "exec": "iw dev wlan0 link 2>/dev/null | awk '/SSID/{print $2}' | head -1 | xargs -I{} printf '\uf1eb %s' '{}' || printf '\uf1eb Off'",
         "exec-if": "test -d /sys/class/net/wlan0",
         "format": "{}",
         "interval": 10,
+        "tooltip": false
+    },
+
+    "custom/keyboard": {
+        "format": "\u2328",
+        "on-click": "if [ -f /tmp/.wvkbd-visible ]; then pkill -USR1 wvkbd; rm /tmp/.wvkbd-visible; else pkill -USR2 wvkbd; touch /tmp/.wvkbd-visible; fi",
         "tooltip": false
     },
 
