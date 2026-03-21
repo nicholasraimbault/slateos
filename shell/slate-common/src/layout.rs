@@ -9,6 +9,20 @@
 //! applicable on Android-class hardware.
 
 // ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Convert physical pixels to logical pixels using the compositor scale factor.
+///
+/// We use `.round()` rather than truncation so that a 1-pixel rounding error
+/// in the physical dimension cannot push a layout over (or under) a threshold.
+/// Both `FormFactor::detect` and `compute_layout` call this function to
+/// guarantee they always agree on the logical width.
+fn to_logical(physical: u32, scale: f32) -> u32 {
+    (physical as f32 / scale).round() as u32
+}
+
+// ---------------------------------------------------------------------------
 // Form factor
 // ---------------------------------------------------------------------------
 
@@ -40,8 +54,7 @@ impl FormFactor {
         // but classification uses width: the horizontal extent determines whether
         // UI panels, dock, and launcher columns fit side-by-side.
         let _ = height;
-        let logical_width = width as f32 / scale;
-        Self::from_logical_width(logical_width as u32)
+        Self::from_logical_width(to_logical(width, scale))
     }
 
     /// Classify from pre-computed logical width. Exposed so callers that
@@ -83,7 +96,7 @@ pub enum PanelPosition {
 ///
 /// All values are in logical pixels. Components should multiply by their own
 /// scale factor if they need physical pixels for rendering.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayoutParams {
     /// Which form factor was detected, retained so callers can branch on it.
     pub form_factor: FormFactor,
@@ -91,8 +104,14 @@ pub struct LayoutParams {
     // -- Dock -----------------------------------------------------------------
     /// Full height of the dock bar including padding.
     pub dock_height: u32,
-    /// Size of each app icon in the dock.
+    /// Visual size of each app icon in the dock.
     pub dock_icon_size: u32,
+    /// Minimum touch-target size for dock icons (always >= 44 per Apple HIG).
+    ///
+    /// Separating this from `dock_icon_size` lets the visual icon be smaller
+    /// than the interactive hit area, which improves aesthetics without
+    /// sacrificing reachability.
+    pub dock_hit_area: u32,
     /// Symmetric padding around the icon row within the dock.
     pub dock_padding: u32,
 
@@ -132,24 +151,36 @@ pub struct LayoutParams {
 /// `width` and `height` are physical pixels as reported by the Wayland output;
 /// `scale` is the compositor's advertised HiDPI scale factor (e.g. `2.0` for a
 /// 2× display). All returned values are in *logical* pixels.
+///
+/// Degenerate inputs (zero dimensions or extreme scale) are handled gracefully:
+/// `panel_width` is clamped to a minimum of 320 so the panel is never invisible.
 pub fn compute_layout(width: u32, height: u32, scale: f32) -> LayoutParams {
     let form_factor = FormFactor::detect(width, height, scale);
 
     // Use logical width for dimension-dependent column/panel adjustments.
     // `width` is the horizontal extent in the compositor's current orientation.
-    let logical_width = width as f32 / scale;
+    // We call to_logical() here (same as detect()) so both always agree.
+    let logical_width = to_logical(width, scale);
 
-    match form_factor {
-        FormFactor::Phone => phone_layout(logical_width as u32),
-        FormFactor::Tablet => tablet_layout(logical_width as u32),
-        FormFactor::Desktop => desktop_layout(logical_width as u32),
-    }
+    let mut params = match form_factor {
+        FormFactor::Phone => phone_layout(logical_width),
+        FormFactor::Tablet => tablet_layout(logical_width),
+        FormFactor::Desktop => desktop_layout(logical_width),
+    };
+
+    // Clamp panel_width so degenerate inputs (e.g. zero-width screen) never
+    // produce an invisible panel.
+    params.panel_width = params.panel_width.max(320);
+
+    params
 }
 
 /// Phone layout: compact, single-column-friendly, fullscreen panels.
 ///
 /// Every measurement stays above the 44 px touch floor so one-handed use is
-/// comfortable on small screens without requiring a stylus.
+/// comfortable on small screens without requiring a stylus. The dock icon is
+/// visually 36 px (fits the compact bar) but its hit area is 44 px so the
+/// touch target requirement is met without inflating the icon render size.
 fn phone_layout(logical_width: u32) -> LayoutParams {
     // Launcher columns scale with the available width while staying at 3 for
     // most phones and bumping to 4 only on wider phablet-class devices.
@@ -160,6 +191,8 @@ fn phone_layout(logical_width: u32) -> LayoutParams {
 
         dock_height: 48,
         dock_icon_size: 36,
+        // Hit area expands to the HIG minimum even though the visual icon is smaller.
+        dock_hit_area: 44,
         // Vertical centering: (48 - 36) / 2 = 6, round up to 8 for breathing room.
         dock_padding: 8,
 
@@ -168,6 +201,8 @@ fn phone_layout(logical_width: u32) -> LayoutParams {
         launcher_gap: 16,
 
         // Phones have no room for a sidebar, so the panel covers the screen.
+        // panel_width is set to logical_width here; compute_layout() will clamp
+        // it to at least 320 for the degenerate zero-width case.
         panel_width: logical_width,
         panel_position: PanelPosition::Fullscreen,
 
@@ -200,6 +235,7 @@ fn tablet_layout(logical_width: u32) -> LayoutParams {
 
         dock_height: 64,
         dock_icon_size: 44,
+        dock_hit_area: 44,
         dock_padding: 10,
 
         launcher_columns,
@@ -230,6 +266,7 @@ fn desktop_layout(logical_width: u32) -> LayoutParams {
 
         dock_height: 56,
         dock_icon_size: 40,
+        dock_hit_area: 44,
         dock_padding: 8,
 
         launcher_columns,
@@ -261,7 +298,7 @@ mod tests {
     #[test]
     fn detect_phone_portrait() {
         // Pixel phone portrait: width=1080, height=2400, scale=2.5
-        // logical width = 1080/2.5 = 432 → phone
+        // logical width = round(1080/2.5) = round(432.0) = 432 → phone
         let ff = FormFactor::detect(1080, 2400, 2.5);
         assert_eq!(ff, FormFactor::Phone);
     }
@@ -269,8 +306,8 @@ mod tests {
     #[test]
     fn detect_phone_landscape() {
         // Same phone rotated to landscape: width=2400, height=1080, scale=2.5
-        // logical width = 2400/2.5 = 960 → tablet-class layout, which is correct
-        // because landscape phone mode benefits from the wider column count.
+        // logical width = round(2400/2.5) = round(960.0) = 960 → tablet-class layout,
+        // which is correct because landscape phone mode benefits from wider columns.
         let ff = FormFactor::detect(2400, 1080, 2.5);
         assert_eq!(ff, FormFactor::Tablet);
     }
@@ -278,7 +315,7 @@ mod tests {
     #[test]
     fn detect_tablet_portrait() {
         // Pixel Tablet portrait: width=1600, height=2560, scale=2.0
-        // logical width = 1600/2.0 = 800 → tablet
+        // logical width = round(1600/2.0) = 800 → tablet
         let ff = FormFactor::detect(1600, 2560, 2.0);
         assert_eq!(ff, FormFactor::Tablet);
     }
@@ -286,7 +323,7 @@ mod tests {
     #[test]
     fn detect_tablet_landscape() {
         // Pixel Tablet landscape: width=2560, height=1600, scale=2.0
-        // logical width = 2560/2.0 = 1280 → tablet
+        // logical width = round(2560/2.0) = 1280 → tablet
         let ff = FormFactor::detect(2560, 1600, 2.0);
         assert_eq!(ff, FormFactor::Tablet);
     }
@@ -331,12 +368,13 @@ mod tests {
 
     #[test]
     fn phone_layout_values() {
-        // 1080×2400 at 2.5× → logical 432 wide → phone
+        // 1080×2400 at 2.5× → logical round(432.0) = 432 wide → phone
         let p = compute_layout(1080, 2400, 2.5);
 
         assert_eq!(p.form_factor, FormFactor::Phone);
         assert_eq!(p.dock_height, 48);
         assert_eq!(p.dock_icon_size, 36);
+        assert_eq!(p.dock_hit_area, 44);
         assert_eq!(p.suggest_bar_height, 44);
         assert_eq!(p.panel_position, PanelPosition::Fullscreen);
         assert_eq!(p.launcher_columns, 3);
@@ -344,7 +382,7 @@ mod tests {
 
     #[test]
     fn phone_wide_gets_four_columns() {
-        // 960×600 physical at 2.0× → logical width = 960/2 = 480 → phone.
+        // 960×600 physical at 2.0× → logical width = round(960/2) = 480 → phone.
         // 480 >= 480 threshold triggers 4-column grid for wider phone screens.
         let p = compute_layout(960, 600, 2.0);
         assert_eq!(p.form_factor, FormFactor::Phone);
@@ -353,7 +391,7 @@ mod tests {
 
     #[test]
     fn phone_narrow_gets_three_columns() {
-        // 800×1280 physical at 3.0× → logical width = 800/3 ≈ 266 → phone, < 480
+        // 800×1280 physical at 3.0× → logical width = round(800/3) = round(266.7) = 267 → phone, < 480
         // → 3-column grid for narrow portrait phones.
         let p = compute_layout(800, 1280, 3.0);
         assert_eq!(p.form_factor, FormFactor::Phone);
@@ -370,6 +408,7 @@ mod tests {
         assert_eq!(p.form_factor, FormFactor::Tablet);
         assert_eq!(p.dock_height, 64);
         assert_eq!(p.dock_icon_size, 44);
+        assert_eq!(p.dock_hit_area, 44);
         assert_eq!(p.suggest_bar_height, 44);
         assert_eq!(p.panel_position, PanelPosition::Right);
         assert_eq!(p.panel_width, 380);
@@ -412,6 +451,7 @@ mod tests {
         assert_eq!(p.form_factor, FormFactor::Desktop);
         assert_eq!(p.dock_height, 56);
         assert_eq!(p.dock_icon_size, 40);
+        assert_eq!(p.dock_hit_area, 44);
         assert_eq!(p.suggest_bar_height, 44);
         assert_eq!(p.panel_position, PanelPosition::Right);
         assert_eq!(p.panel_width, 420);
@@ -443,8 +483,8 @@ mod tests {
                 p.form_factor
             );
             assert!(
-                p.dock_icon_size >= 36,
-                "dock_icon_size below 36 for {:?}",
+                p.dock_hit_area >= 44,
+                "dock_hit_area below 44 for {:?}",
                 p.form_factor
             );
             assert!(
@@ -453,6 +493,25 @@ mod tests {
                 p.form_factor
             );
         }
+    }
+
+    // -- Degenerate input: zero dimensions -----------------------------------
+
+    #[test]
+    fn degenerate_zero_dimensions_clamps_panel_width() {
+        // compute_layout(0, 0, 1.0): logical width = 0 → phone form factor.
+        // panel_width would be 0 (logical_width), but must be clamped to 320
+        // so the panel is never invisible.
+        let p = compute_layout(0, 0, 1.0);
+        assert_eq!(p.form_factor, FormFactor::Phone);
+        assert!(
+            p.panel_width >= 320,
+            "panel_width {} is below minimum 320 for degenerate input",
+            p.panel_width
+        );
+        // All other invariants still hold.
+        assert!(p.touch_target_min >= 44);
+        assert!(p.dock_hit_area >= 44);
     }
 
     // -- Landscape vs portrait consistency -----------------------------------
@@ -513,5 +572,22 @@ mod tests {
             };
             assert_eq!(ff, expected, "mismatch at logical width {w}");
         }
+    }
+
+    // -- Copy trait ----------------------------------------------------------
+
+    #[test]
+    fn layout_params_is_copy() {
+        // Verify that LayoutParams, FormFactor, and PanelPosition are all Copy.
+        // If any field were non-Copy this would fail to compile.
+        let p = compute_layout(2560, 1600, 2.0);
+        let _copy = p; // move
+        let _also = p; // would fail to compile if LayoutParams were not Copy
+        let ff = p.form_factor;
+        let _ff2 = ff;
+        let _ff3 = ff;
+        let pos = p.panel_position;
+        let _pos2 = pos;
+        let _pos3 = pos;
     }
 }

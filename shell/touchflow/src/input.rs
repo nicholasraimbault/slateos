@@ -82,7 +82,9 @@ impl InputState {
 /// Logical events emitted by the input reader for the gesture recognizer.
 /// These are platform-independent so tests can inject them freely.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // FingerMove::time used by momentum tracker in dispatch layer
+// The `Finger` prefix is conventional for touch input events; suppressing the
+// clippy lint that would force renaming to ambiguous single-word variants.
+#[allow(clippy::enum_variant_names)]
 pub enum InputEvent {
     /// A new finger touched the screen.
     FingerDown {

@@ -11,22 +11,12 @@ use serde::Deserialize;
 // Top-level config
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct TouchFlowConfig {
     pub gestures: GesturesConfig,
     pub edge: EdgeCfg,
     pub niri: NiriConfig,
-}
-
-impl Default for TouchFlowConfig {
-    fn default() -> Self {
-        Self {
-            gestures: GesturesConfig::default(),
-            edge: EdgeCfg::default(),
-            niri: NiriConfig::default(),
-        }
-    }
 }
 
 impl TouchFlowConfig {
@@ -116,17 +106,11 @@ impl Default for EdgeCfg {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct NiriConfig {
     /// Override for `$NIRI_SOCKET`.  When `None`, the env var is used.
     pub socket_path: Option<String>,
-}
-
-impl Default for NiriConfig {
-    fn default() -> Self {
-        Self { socket_path: None }
-    }
 }
 
 // ---------------------------------------------------------------------------

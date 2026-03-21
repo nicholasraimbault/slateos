@@ -1,8 +1,8 @@
-/// Edge detection for touchscreen input.
-///
-/// Determines whether a touch position falls within an "edge zone" — a narrow
-/// strip along the screen border that triggers edge-specific gestures (dock
-/// reveal, back navigation, quick settings, OpenClaw sidebar).
+//! Edge detection for touchscreen input.
+//!
+//! Determines whether a touch position falls within an "edge zone" — a narrow
+//! strip along the screen border that triggers edge-specific gestures (dock
+//! reveal, back navigation, quick settings, OpenClaw sidebar).
 
 /// Which physical screen edge a touch started near.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

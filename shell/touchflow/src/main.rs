@@ -1,3 +1,8 @@
+// On non-Linux platforms (macOS dev machines) the event loop and input reader
+// are compiled out. Allow dead_code so the gesture/dispatch modules can still
+// be compiled and tested without spurious warnings.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 /// TouchFlow — multitouch gesture daemon for Slate OS.
 ///
 /// Reads raw multitouch events from the touchscreen, recognizes gestures,

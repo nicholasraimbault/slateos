@@ -6,14 +6,37 @@
 
 use crate::apps::AppEntry;
 use crate::dbus_listener::DbusEvent;
-use crate::grid;
 use crate::search;
 
+use slate_common::layout::{self, LayoutParams};
 use slate_common::theme;
 use slate_common::Palette;
 
 use iced::widget::{column, container, row, scrollable, text, text_input, Column, Row};
 use iced::{Element, Length, Subscription, Task, Theme};
+
+/// Physical screen dimensions and scale, used to compute the adaptive layout.
+///
+/// These are tracked in the launcher state so that the column count can be
+/// recalculated if the window is resized (e.g. orientation change).
+#[derive(Debug, Clone, Copy)]
+struct ScreenInfo {
+    width: u32,
+    height: u32,
+    scale: f32,
+}
+
+impl Default for ScreenInfo {
+    /// Sensible tablet-class defaults so the layout is usable before the
+    /// compositor sends real dimensions.
+    fn default() -> Self {
+        Self {
+            width: 2560,
+            height: 1600,
+            scale: 2.0,
+        }
+    }
+}
 
 /// Top-level launcher state.
 pub struct Launcher {
@@ -25,6 +48,10 @@ pub struct Launcher {
     visible: bool,
     /// Current system palette.
     palette: Palette,
+    /// Physical screen info used to derive layout parameters.
+    screen_info: ScreenInfo,
+    /// Adaptive layout parameters derived from screen size.
+    layout: LayoutParams,
     /// Channel receiver for D-Bus events.
     dbus_rx: Option<tokio::sync::mpsc::UnboundedReceiver<DbusEvent>>,
     /// Channel sender for D-Bus events (kept alive so we can pass it).
@@ -46,6 +73,8 @@ pub enum Message {
     LaunchApp(usize),
     /// System palette was updated.
     PaletteChanged(Palette),
+    /// The output/window size changed; update adaptive layout.
+    ScreenSizeChanged { width: u32, height: u32, scale: f32 },
     /// A keyboard event occurred.
     KeyPress(iced::keyboard::Key),
     /// D-Bus event received.
@@ -58,13 +87,21 @@ impl Launcher {
     /// Create a new launcher with the given app list.
     pub fn new() -> (Self, Task<Message>) {
         let apps = crate::apps::discover_apps();
+        tracing::info!("discovered {} apps", apps.len());
+
         let (dbus_tx, dbus_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let screen_info = ScreenInfo::default();
+        let layout_params =
+            layout::compute_layout(screen_info.width, screen_info.height, screen_info.scale);
 
         let launcher = Self {
             apps,
             search_query: String::new(),
             visible: false,
             palette: Palette::default(),
+            screen_info,
+            layout: layout_params,
             dbus_rx: Some(dbus_rx),
             dbus_tx,
         };
@@ -112,6 +149,26 @@ impl Launcher {
             }
             Message::PaletteChanged(palette) => {
                 self.palette = palette;
+                Task::none()
+            }
+            Message::ScreenSizeChanged {
+                width,
+                height,
+                scale,
+            } => {
+                self.screen_info = ScreenInfo {
+                    width,
+                    height,
+                    scale,
+                };
+                self.layout = layout::compute_layout(width, height, scale);
+                tracing::debug!(
+                    "screen size changed: {}x{} @ {:.1}x → {} launcher columns",
+                    width,
+                    height,
+                    scale,
+                    self.layout.launcher_columns
+                );
                 Task::none()
             }
             Message::KeyPress(key) => {
@@ -175,56 +232,84 @@ impl Launcher {
         .padding(20)
         .align_y(iced::Alignment::Center);
 
-        // App grid — build directly from the filtered list to avoid lifetime issues
+        // Adaptive column count from the layout system. Clamped to at least 1
+        // so the grid is always usable even before a ScreenSizeChanged message
+        // has arrived from the compositor.
+        let columns = (self.layout.launcher_columns as usize).max(1);
+        let icon_size = self.layout.launcher_icon_size as f32;
+        let gap = self.layout.launcher_gap as f32;
+
+        // App grid — build directly from the filtered list to avoid lifetime issues.
         let filtered = self.filtered_apps();
-        let columns = grid::DEFAULT_COLUMNS;
 
-        let grid_column: Column<Message> = filtered.chunks(columns.max(1)).enumerate().fold(
-            Column::new().spacing(16).padding(20),
-            |col, (row_idx, apps_chunk)| {
-                let row_widget: Row<Message> = apps_chunk.iter().enumerate().fold(
-                    Row::new().spacing(12),
-                    |r, (col_idx, app)| {
-                        let global_idx = row_idx * columns + col_idx;
+        let grid_column: Column<Message> = if filtered.is_empty() {
+            // Empty state: show a friendly message centred in the grid area.
+            let empty_label = if self.apps.is_empty() {
+                "No apps installed"
+            } else {
+                "No results"
+            };
 
-                        let cell = iced::widget::button(
-                            column![
-                                // Icon placeholder (a coloured square for now)
-                                container(text("").size(grid::ICON_SIZE as u16))
-                                    .width(Length::Fixed(grid::ICON_SIZE as f32))
-                                    .height(Length::Fixed(grid::ICON_SIZE as f32))
-                                    .center_x(Length::Fixed(grid::ICON_SIZE as f32))
-                                    .center_y(Length::Fixed(grid::ICON_SIZE as f32)),
-                                text(&app.name).size(12).center(),
-                            ]
-                            .spacing(4)
-                            .align_x(iced::Alignment::Center),
-                        )
-                        .on_press(Message::LaunchApp(global_idx))
-                        .padding(8)
-                        .width(Length::FillPortion(1));
+            Column::new()
+                .spacing(gap)
+                .padding(20.0)
+                .push(
+                    container(text(empty_label).size(18))
+                        .width(Length::Fill)
+                        .center_x(Length::Fill),
+                )
+        } else {
+            filtered.chunks(columns).enumerate().fold(
+                Column::new().spacing(gap).padding(20.0),
+                |col, (row_idx, apps_chunk)| {
+                    let row_widget: Row<Message> = apps_chunk.iter().enumerate().fold(
+                        Row::new().spacing(gap),
+                        |r, (col_idx, app)| {
+                            let global_idx = row_idx * columns + col_idx;
 
-                        r.push(cell)
-                    },
-                );
+                            let cell = iced::widget::button(
+                                column![
+                                    // Icon placeholder (a rounded square; real icon
+                                    // lookup via the icon theme is future work).
+                                    container(
+                                        text(app.icon_placeholder()).size(icon_size * 0.5),
+                                    )
+                                    .width(Length::Fixed(icon_size))
+                                    .height(Length::Fixed(icon_size))
+                                    .center_x(Length::Fixed(icon_size))
+                                    .center_y(Length::Fixed(icon_size)),
+                                    text(&app.name).size(12).center(),
+                                ]
+                                .spacing(4)
+                                .align_x(iced::Alignment::Center),
+                            )
+                            .on_press(Message::LaunchApp(global_idx))
+                            .padding(8)
+                            .width(Length::FillPortion(1));
 
-                // Pad the row with empty space if it has fewer than columns items
-                let row_widget = if apps_chunk.len() < columns {
-                    let empty_cells = columns - apps_chunk.len();
-                    (0..empty_cells).fold(row_widget, |r, _| {
-                        r.push(
-                            container(text(""))
-                                .width(Length::FillPortion(1))
-                                .height(Length::Shrink),
-                        )
-                    })
-                } else {
-                    row_widget
-                };
+                            r.push(cell)
+                        },
+                    );
 
-                col.push(row_widget)
-            },
-        );
+                    // Pad the row with empty space if it has fewer than `columns` items
+                    // so cells stay the same width as full rows.
+                    let row_widget = if apps_chunk.len() < columns {
+                        let empty_cells = columns - apps_chunk.len();
+                        (0..empty_cells).fold(row_widget, |r, _| {
+                            r.push(
+                                container(text(""))
+                                    .width(Length::FillPortion(1))
+                                    .height(Length::Shrink),
+                            )
+                        })
+                    } else {
+                        row_widget
+                    };
+
+                    col.push(row_widget)
+                },
+            )
+        };
 
         let content = column![search_bar, scrollable(grid_column).height(Length::Fill),]
             .width(Length::Fill)
@@ -406,5 +491,50 @@ mod tests {
     fn title_returns_expected() {
         let (launcher, _) = Launcher::new();
         assert_eq!(launcher.title(), "Slate Launcher");
+    }
+
+    #[test]
+    fn screen_size_changed_updates_layout() {
+        let (mut launcher, _) = Launcher::new();
+
+        // Simulate a phone-class screen: 1080×2400 at 2.5× → logical width 432 → phone → 3 cols
+        let _ = launcher.update(Message::ScreenSizeChanged {
+            width: 1080,
+            height: 2400,
+            scale: 2.5,
+        });
+
+        assert_eq!(
+            launcher.layout.launcher_columns, 3,
+            "phone should get 3 launcher columns"
+        );
+    }
+
+    #[test]
+    fn screen_size_changed_tablet_layout() {
+        let (mut launcher, _) = Launcher::new();
+
+        // Mid-width tablet: 1800×1200 at 2.0× → logical width 900 → tablet → 6 cols
+        // (900 >= 900 threshold but < 1200, so the 6-column branch fires)
+        let _ = launcher.update(Message::ScreenSizeChanged {
+            width: 1800,
+            height: 1200,
+            scale: 2.0,
+        });
+
+        assert_eq!(
+            launcher.layout.launcher_columns, 6,
+            "mid-width tablet (logical 900) should get 6 launcher columns"
+        );
+    }
+
+    #[test]
+    fn initial_layout_is_usable() {
+        // The default ScreenInfo produces a valid layout (non-zero columns).
+        let (launcher, _) = Launcher::new();
+        assert!(
+            launcher.layout.launcher_columns > 0,
+            "initial layout must have at least one column"
+        );
     }
 }

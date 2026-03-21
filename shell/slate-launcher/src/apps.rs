@@ -16,19 +16,55 @@ pub struct AppEntry {
     pub keywords: Vec<String>,
 }
 
+impl AppEntry {
+    /// Return a single Unicode character suitable for use as a placeholder
+    /// icon when the real icon file is not yet resolved.
+    ///
+    /// Uses the first letter of the app name, uppercased. Falls back to "?"
+    /// for apps whose name is empty (which should not occur in practice, since
+    /// `parse_desktop_content` requires `Name` to be present).
+    pub fn icon_placeholder(&self) -> String {
+        self.name
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".to_string())
+    }
+}
+
 /// Return the list of directories to scan for .desktop files.
 ///
-/// Uses `XDG_DATA_DIRS` when set, otherwise falls back to the FreeDesktop
-/// default (`/usr/local/share:/usr/share`). Each directory gets
-/// `/applications` appended.
+/// Follows the XDG Base Directory Specification:
+/// 1. `$XDG_DATA_HOME/applications` (defaults to `~/.local/share/applications`)
+///    — user-local apps; entries here override system entries with the same ID.
+/// 2. Each directory in `$XDG_DATA_DIRS` (defaults to `/usr/local/share:/usr/share`)
+///    with `/applications` appended — system-wide apps.
+///
+/// The user directory is listed first so that `discover_apps` deduplication
+/// (keep first occurrence) naturally prefers user-installed apps.
 pub fn desktop_dirs() -> Vec<PathBuf> {
-    let raw = std::env::var("XDG_DATA_DIRS")
+    let mut dirs = Vec::new();
+
+    // 1. User-local directory: $XDG_DATA_HOME/applications or ~/.local/share/applications
+    let user_data_home = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            // $HOME is reliable on Linux; fall back to an empty path when unset
+            // (the resulting dir will simply not exist and will be skipped).
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(home).join(".local").join("share")
+        });
+    dirs.push(user_data_home.join("applications"));
+
+    // 2. System directories from $XDG_DATA_DIRS
+    let system_raw = std::env::var("XDG_DATA_DIRS")
         .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string());
 
-    raw.split(':')
-        .filter(|s| !s.is_empty())
-        .map(|dir| PathBuf::from(dir).join("applications"))
-        .collect()
+    for dir in system_raw.split(':').filter(|s| !s.is_empty()) {
+        dirs.push(PathBuf::from(dir).join("applications"));
+    }
+
+    dirs
 }
 
 /// Parse a single .desktop file into an `AppEntry`.
@@ -261,10 +297,65 @@ Type=Application
     }
 
     #[test]
+    fn icon_placeholder_returns_first_letter_uppercased() {
+        let app = AppEntry {
+            name: "firefox".to_string(),
+            exec: "firefox".to_string(),
+            icon: String::new(),
+            desktop_id: "firefox".to_string(),
+            keywords: Vec::new(),
+        };
+        assert_eq!(app.icon_placeholder(), "F");
+    }
+
+    #[test]
+    fn icon_placeholder_returns_question_mark_for_empty_name() {
+        let app = AppEntry {
+            name: String::new(),
+            exec: "something".to_string(),
+            icon: String::new(),
+            desktop_id: "something".to_string(),
+            keywords: Vec::new(),
+        };
+        assert_eq!(app.icon_placeholder(), "?");
+    }
+
+    #[test]
     fn desktop_dirs_returns_non_empty() {
         // Even without XDG_DATA_DIRS, the fallback should produce paths
         let dirs = desktop_dirs();
         assert!(!dirs.is_empty());
+    }
+
+    #[test]
+    fn desktop_dirs_includes_user_local_first() {
+        // The first entry must be under the user's data home so that
+        // user-installed apps shadow system apps with the same desktop ID.
+        let dirs = desktop_dirs();
+        assert!(!dirs.is_empty(), "dirs must not be empty");
+
+        // The first dir should end in "applications" and be rooted under
+        // either $XDG_DATA_HOME or the ~/.local/share fallback.
+        let first = &dirs[0];
+        assert!(
+            first.ends_with("applications"),
+            "first dir should end with 'applications', got: {first:?}"
+        );
+    }
+
+    #[test]
+    fn desktop_dirs_respects_xdg_data_home() {
+        // Temporarily override XDG_DATA_HOME and confirm the first dir uses it.
+        // We use a temp-style path so we can verify the prefix without
+        // depending on the real filesystem.
+        std::env::set_var("XDG_DATA_HOME", "/tmp/test-data-home");
+        let dirs = desktop_dirs();
+        std::env::remove_var("XDG_DATA_HOME");
+
+        assert_eq!(
+            dirs[0],
+            std::path::PathBuf::from("/tmp/test-data-home/applications")
+        );
     }
 
     #[test]

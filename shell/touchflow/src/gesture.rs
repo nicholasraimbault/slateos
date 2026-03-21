@@ -346,6 +346,7 @@ fn dominant_direction(dx: f64, dy: f64) -> SwipeDirection {
 }
 
 /// Average inter-finger distance for a set of positions.
+#[cfg(test)]
 fn inter_finger_distance(positions: &[(i32, i32)]) -> f64 {
     if positions.len() < 2 {
         return 0.0;
