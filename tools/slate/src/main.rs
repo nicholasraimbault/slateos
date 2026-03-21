@@ -16,6 +16,7 @@ mod dev;
 mod device;
 mod flash;
 mod info;
+mod init;
 mod services;
 mod status;
 mod workspace;
@@ -69,6 +70,9 @@ enum Command {
 
     /// Print system and project diagnostic info.
     Info(info::InfoArgs),
+
+    /// Set up a local development environment for a device.
+    Init(init::InitArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -98,5 +102,6 @@ fn main() -> Result<()> {
         Command::Check(args) => check::run(args),
         Command::Dev(args) => dev::run(args),
         Command::Info(args) => info::run(args),
+        Command::Init(args) => init::run(args),
     }
 }
