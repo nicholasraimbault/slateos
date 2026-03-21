@@ -4,7 +4,7 @@ A Linux distribution for tablets, phones, and desktops. Built on Chimera Linux w
 
 ## What Is This
 
-SlateOS replaces stock Android or generic Linux desktops with a purpose-built environment: the Niri scrollable tiling Wayland compositor for window management, and a suite of Rust applications for gestures, app launching, theming, and AI assistance. It targets the Pixel Tablet as its primary device, with support for Pixel phones, x86 desktops, and the ONN tablet as a legacy target.
+SlateOS replaces stock Android or generic Linux desktops with a purpose-built environment: the Niri scrollable tiling Wayland compositor for window management, and a suite of Rust applications for gestures, app launching, theming, and AI assistance. It targets the Pixel Tablet as its primary device, with support for Pixel phones and x86 desktops.
 
 ## Why
 

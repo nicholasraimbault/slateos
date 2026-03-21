@@ -1,9 +1,0 @@
-#!/bin/sh
-# Stage 2 modules — loaded after compositor for fast boot
-for mod in cfg80211 wlan icnss2 \
-           machine_dlkm wcd937x_dlkm bolero_cdc_dlkm \
-           btpower bt_fm_slim; do
-    modprobe "$mod" 2>/dev/null || true
-done
-touch /run/ready/slate-modules
-exec sleep infinity

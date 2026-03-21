@@ -4,7 +4,7 @@
 
 - Rust stable toolchain
 - For rootfs builds: x86_64 host with `qemu-user-static` (for aarch64 cross-build), or native aarch64
-- For ONN tablet: `mkbootimg`, `avbtool` (from AOSP), `fastboot`
+- For Pixel devices: `fastboot` (from Android SDK platform-tools)
 
 ## Build Shell Crates
 
@@ -30,37 +30,42 @@ cargo clippy --workspace -- -D warnings
 The rootfs builder creates a complete Chimera Linux root filesystem with all SlateOS components installed.
 
 ```bash
-# Build rootfs (requires root, or run in container)
-sudo bash build/build-rootfs.sh /path/to/rootfs /path/to/output.tar.gz
+# Build rootfs for Pixel Tablet (default)
+doas bash build/build-rootfs.sh /path/to/rootfs /path/to/output.tar.gz pixel-tablet
+
+# Build rootfs for generic x86
+doas bash build/build-rootfs.sh /path/to/rootfs /path/to/output.tar.gz generic-x86
 ```
 
 This script:
-1. Bootstraps a Chimera Linux aarch64 rootfs
+1. Bootstraps a Chimera Linux rootfs for the target architecture
 2. Installs system packages (niri, waybar, pipewire, etc.)
-3. Copies SlateOS shell binaries
+3. Builds and installs SlateOS shell binaries
 4. Installs arkhe init system
-5. Configures services and configs
-6. Packages as a tarball
+5. Installs device-specific niri config and services
+6. Creates a user and packages as a tarball
 
 ## Device-Specific Build
 
-### ONN Tablet
-
-```bash
-# Flash boot images (requires device in fastboot mode)
-bash build/devices/onn-tablet/flash-tablet.sh
-
-# Build images only (no flash)
-bash build/devices/onn-tablet/flash-tablet.sh --build-only
-```
-
 ### Pixel Tablet
 
-TBD — build/flash scripts will be added as device support matures.
+```bash
+# Build rootfs
+doas bash build/build-rootfs.sh /root/slate-rootfs /root/slate-rootfs.tar.gz pixel-tablet
+
+# Flash (requires device in fastboot mode)
+# TBD — flash script will be added as device support matures
+```
 
 ### Generic x86
 
-TBD — will produce a bootable ISO or USB image.
+```bash
+# Build rootfs
+doas bash build/build-rootfs.sh /root/slate-rootfs /root/slate-rootfs.tar.gz generic-x86
+
+# Write to USB
+# TBD — will produce a bootable ISO or USB image
+```
 
 ## arkhe Binaries
 

@@ -19,8 +19,8 @@ pub struct AboutInfo {
 impl Default for AboutInfo {
     fn default() -> Self {
         Self {
-            device: "ONN 11 Tablet Pro 2024".to_string(),
-            soc: "Snapdragon 685".to_string(),
+            device: "SlateOS Device".to_string(),
+            soc: "Unknown".to_string(),
             ram: "Unknown".to_string(),
             storage: "Unknown".to_string(),
             os_version: SLATE_VERSION.to_string(),
@@ -41,13 +41,53 @@ pub async fn gather_info() -> AboutInfo {
     let kernel = read_kernel().await;
 
     AboutInfo {
-        device: "ONN 11 Tablet Pro 2024".to_string(),
-        soc: "Snapdragon 685".to_string(),
+        device: read_device_name().await,
+        soc: read_soc().await,
         ram,
         storage,
         os_version: SLATE_VERSION.to_string(),
         kernel,
     }
+}
+
+/// Read device model from /sys/firmware/devicetree/base/model or DMI.
+async fn read_device_name() -> String {
+    // Try devicetree first (ARM devices)
+    if let Ok(model) = tokio::fs::read_to_string("/sys/firmware/devicetree/base/model").await {
+        let name = model.trim_end_matches('\0').trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    // Fall back to DMI product name (x86)
+    if let Ok(name) = tokio::fs::read_to_string("/sys/class/dmi/id/product_name").await {
+        let name = name.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    "SlateOS Device".to_string()
+}
+
+/// Read SoC name from /proc/cpuinfo or devicetree.
+async fn read_soc() -> String {
+    if let Ok(compat) = tokio::fs::read_to_string("/sys/firmware/devicetree/base/compatible").await
+    {
+        let first = compat.split('\0').next().unwrap_or("").trim();
+        if !first.is_empty() {
+            return first.to_string();
+        }
+    }
+    if let Ok(cpuinfo) = tokio::fs::read_to_string("/proc/cpuinfo").await {
+        for line in cpuinfo.lines() {
+            if line.starts_with("model name") {
+                if let Some(val) = line.split(':').nth(1) {
+                    return val.trim().to_string();
+                }
+            }
+        }
+    }
+    "Unknown".to_string()
 }
 
 async fn read_ram() -> String {
@@ -186,7 +226,7 @@ mod tests {
     #[test]
     fn default_about_info_has_device() {
         let info = AboutInfo::default();
-        assert_eq!(info.device, "ONN 11 Tablet Pro 2024");
+        assert_eq!(info.device, "SlateOS Device");
         assert_eq!(info.os_version, SLATE_VERSION);
     }
 }

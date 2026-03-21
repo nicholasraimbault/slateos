@@ -60,7 +60,7 @@
     },
 
     "backlight": {
-        // ONN 11 Tablet Pro panel backlight
+        // Panel backlight (auto-detected)
         "device": "panel0-backlight",
         "format": "☀ {percent}%",
         "tooltip": false

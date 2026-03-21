@@ -802,7 +802,7 @@ mod tests {
         let mut r = default_recognizer();
         let now = Instant::now();
 
-        // Start in bottom edge zone (1280x1840 screen, edge zone = 50px).
+        // Start in bottom edge zone (2560x1600 screen, edge zone = 50px).
         r.on_event(&InputEvent::FingerDown {
             slot: 0,
             x: 640,

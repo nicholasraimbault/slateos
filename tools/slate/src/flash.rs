@@ -45,15 +45,11 @@ pub fn run(args: FlashArgs) -> Result<()> {
     println!();
 
     match args.device {
-        Device::OnnTablet => {
-            println!("  For ONN tablet, use the existing script:");
-            println!("    bash build/devices/onn-tablet/flash-tablet.sh");
+        Device::GenericX86 | Device::Framework12 => {
+            println!("  For x86 devices, write the rootfs image with dd:");
+            println!("    doas dd if=slate-x86_64.img of=/dev/sdX bs=4M status=progress");
         }
-        Device::GenericX86 => {
-            println!("  For generic-x86, write the rootfs image with dd:");
-            println!("    sudo dd if=slate-x86_64.img of=/dev/sdX bs=4M status=progress");
-        }
-        Device::PixelTablet | Device::PixelPhone => {
+        Device::PixelTablet | Device::PixelPhone | Device::PixelFold => {
             println!("  For Pixel devices, boot to fastboot and run:");
             println!("    fastboot flash boot slate-boot.img");
             println!("    fastboot flash system slate-system.img");

@@ -1,11 +1,16 @@
-/// `slate config` — print or edit the slate CLI configuration.
+/// `slate config` — read, write, and display the slate CLI configuration.
 ///
-/// The slate CLI does not yet persist per-user config; this subcommand
-/// prints what configuration *would* live at `~/.config/slate/cli.toml`
-/// and documents the keys.  The subcommand is a scaffold for future
-/// persistent config (default device, cross-toolchain path, etc.).
-use anyhow::Result;
+/// Persists per-user settings to `$XDG_CONFIG_HOME/slate/cli.toml` (or
+/// `~/.config/slate/cli.toml`).  Keys control defaults for other
+/// subcommands so they don't need to be repeated on every invocation.
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
 use clap::Args;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info};
+
+use crate::device::Device;
 
 // ---------------------------------------------------------------------------
 // Args
@@ -14,9 +19,92 @@ use clap::Args;
 /// Arguments for `slate config`.
 #[derive(Debug, Args)]
 pub struct ConfigArgs {
-    /// Print the path where cli.toml would be stored, then exit.
+    /// Print only the config file path, then exit.
     #[arg(long)]
     pub path: bool,
+
+    /// Set the default target device (e.g. `generic-x86`, `pixel-tablet`).
+    #[arg(long)]
+    pub set_device: Option<Device>,
+
+    /// Set the path to the aarch64-musl cross toolchain.
+    #[arg(long)]
+    pub set_cross_toolchain: Option<String>,
+
+    /// Reset configuration to built-in defaults.
+    #[arg(long)]
+    pub reset: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Config struct
+// ---------------------------------------------------------------------------
+
+/// Persisted CLI configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CliConfig {
+    /// Default `--device` flag when none is specified.
+    #[serde(default = "default_device_str")]
+    pub default_device: String,
+
+    /// Path to aarch64-unknown-linux-musl cross toolchain (empty = not set).
+    #[serde(default)]
+    pub cross_toolchain: String,
+
+    /// Where build-rootfs.sh caches downloads (empty = default temp dir).
+    #[serde(default)]
+    pub rootfs_cache: String,
+}
+
+fn default_device_str() -> String {
+    "generic-x86".to_string()
+}
+
+impl Default for CliConfig {
+    fn default() -> Self {
+        Self {
+            default_device: default_device_str(),
+            cross_toolchain: String::new(),
+            rootfs_cache: String::new(),
+        }
+    }
+}
+
+impl CliConfig {
+    /// Load config from disk, returning defaults if the file doesn't exist.
+    pub fn load() -> Result<Self> {
+        let path = config_path();
+        if !path.exists() {
+            debug!(path = %path.display(), "no config file found, using defaults");
+            return Ok(Self::default());
+        }
+
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let config: Self = toml::from_str(&contents)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+
+        debug!(path = %path.display(), "loaded config");
+        Ok(config)
+    }
+
+    /// Save config to disk, creating parent directories if needed.
+    pub fn save(&self) -> Result<()> {
+        let path = config_path();
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+
+        let contents = toml::to_string_pretty(self)
+            .context("failed to serialize config")?;
+        std::fs::write(&path, contents)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+
+        info!(path = %path.display(), "saved config");
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -25,56 +113,89 @@ pub struct ConfigArgs {
 
 /// Execute `slate config`.
 pub fn run(args: ConfigArgs) -> Result<()> {
-    let config_path = default_config_path();
+    let path = config_path();
 
     if args.path {
-        println!("{}", config_path.display());
+        println!("{}", path.display());
         return Ok(());
     }
 
+    if args.reset {
+        let config = CliConfig::default();
+        config.save()?;
+        println!("  Config reset to defaults.");
+        println!("  Saved to: {}", path.display());
+        return Ok(());
+    }
+
+    let mut config = CliConfig::load()?;
+    let mut changed = false;
+
+    if let Some(device) = args.set_device {
+        config.default_device = device.to_string();
+        changed = true;
+    }
+
+    if let Some(toolchain) = args.set_cross_toolchain {
+        config.cross_toolchain = toolchain;
+        changed = true;
+    }
+
+    if changed {
+        config.save()?;
+        println!("  Config updated.");
+    }
+
+    print_config(&config, &path);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Display
+// ---------------------------------------------------------------------------
+
+fn print_config(config: &CliConfig, path: &std::path::Path) {
     println!();
     println!("  slate config");
     println!("  ------------");
+    println!("  file             : {}", path.display());
+    println!(
+        "  status           : {}",
+        if path.exists() { "loaded" } else { "defaults (no file)" }
+    );
     println!();
-    println!("  Config file : {}", config_path.display());
-    println!("  Status      : not yet implemented (using built-in defaults)");
+    println!("  default_device   : {}", config.default_device);
+    println!(
+        "  cross_toolchain  : {}",
+        if config.cross_toolchain.is_empty() { "(not set)" } else { &config.cross_toolchain }
+    );
+    println!(
+        "  rootfs_cache     : {}",
+        if config.rootfs_cache.is_empty() { "(not set)" } else { &config.rootfs_cache }
+    );
     println!();
-    println!("  Future keys (cli.toml):");
-    println!("    default_device = \"generic-x86\"   # default --device flag");
-    println!("    cross_toolchain = \"\"              # path to aarch64 musl toolchain");
-    println!("    rootfs_cache = \"\"                 # where build-rootfs.sh caches downloads");
-    println!("    web_ui = false                    # enable localhost:3000 guided setup");
-    println!();
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Return the canonical path for the slate CLI config file.
+/// Canonical path for the slate CLI config file.
 ///
-/// Respects `$XDG_CONFIG_HOME` when set, otherwise falls back to
-/// `~/.config/slate/cli.toml` — matching XDG Base Directory spec.
-fn default_config_path() -> std::path::PathBuf {
+/// Respects `$XDG_CONFIG_HOME`; falls back to `~/.config/slate/cli.toml`.
+pub fn config_path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
+        .map(PathBuf::from)
         .unwrap_or_else(|| {
-            dirs_home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("/root"))
+            home_dir()
+                .unwrap_or_else(|| PathBuf::from("/root"))
                 .join(".config")
         });
     base.join("slate").join("cli.toml")
 }
 
-/// Resolve the current user's home directory without pulling in the `dirs` crate.
-///
-/// Checks `$HOME` first (always set on Linux/macOS), then falls back to
-/// the passwd entry via `getpwuid`.  Returns `None` only in degenerate
-/// environments (containers with no home).
-fn dirs_home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +207,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_config_has_generic_x86() {
+        let config = CliConfig::default();
+        assert_eq!(config.default_device, "generic-x86");
+    }
+
+    #[test]
+    fn config_roundtrip_toml() {
+        let config = CliConfig {
+            default_device: "pixel-tablet".to_string(),
+            cross_toolchain: "/opt/musl".to_string(),
+            rootfs_cache: "/tmp/cache".to_string(),
+        };
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let deserialized: CliConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn config_deserialize_empty_uses_defaults() {
+        let config: CliConfig = toml::from_str("").unwrap();
+        assert_eq!(config.default_device, "generic-x86");
+        assert!(config.cross_toolchain.is_empty());
+    }
+
+    #[test]
+    fn config_deserialize_partial_fills_defaults() {
+        let config: CliConfig =
+            toml::from_str("default_device = \"pixel-tablet\"").unwrap();
+        assert_eq!(config.default_device, "pixel-tablet");
+        assert!(config.cross_toolchain.is_empty());
+    }
+
+    #[test]
     fn config_path_ends_with_cli_toml() {
-        let p = default_config_path();
+        let p = config_path();
         assert!(
             p.to_string_lossy().ends_with("slate/cli.toml"),
             "unexpected path: {p:?}"
@@ -96,29 +250,32 @@ mod tests {
 
     #[test]
     fn config_path_honours_xdg_config_home() {
-        // Temporarily set XDG_CONFIG_HOME and verify the path changes.
-        // Safety: environment mutation is not async-signal-safe, but tests
-        // run single-threaded per process by default in Rust.
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", "/tmp/xdg-test");
-        let p = default_config_path();
-        assert_eq!(p, std::path::PathBuf::from("/tmp/xdg-test/slate/cli.toml"));
+        let p = config_path();
+        assert_eq!(p, PathBuf::from("/tmp/xdg-test/slate/cli.toml"));
     }
 
     #[test]
-    fn config_runs_without_error() {
-        let args = ConfigArgs { path: false };
+    fn config_display_runs_without_error() {
+        let args = ConfigArgs {
+            path: false,
+            set_device: None,
+            set_cross_toolchain: None,
+            reset: false,
+        };
         assert!(run(args).is_ok());
     }
 
     #[test]
     fn config_path_flag_runs_without_error() {
-        let args = ConfigArgs { path: true };
+        let args = ConfigArgs {
+            path: true,
+            set_device: None,
+            set_cross_toolchain: None,
+            reset: false,
+        };
         assert!(run(args).is_ok());
     }
-
-    // ---------------------------------------------------------------------------
-    // Test helper: temporarily override an env var and restore on drop.
-    // ---------------------------------------------------------------------------
 
     struct EnvGuard {
         key: &'static str,
@@ -128,7 +285,7 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let original = std::env::var_os(key);
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value) };
             EnvGuard { key, original }
         }
     }
@@ -136,8 +293,8 @@ mod tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             match &self.original {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
             }
         }
     }

@@ -13,6 +13,7 @@ mod build;
 mod config;
 mod device;
 mod flash;
+mod services;
 mod status;
 
 use anyhow::Result;
@@ -52,6 +53,9 @@ enum Command {
 
     /// Show current build status and available shell crates.
     Status(status::StatusArgs),
+
+    /// List and inspect arkhe service definitions.
+    Services(services::ServicesArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -77,5 +81,6 @@ fn main() -> Result<()> {
         Command::Flash(args) => flash::run(args),
         Command::Config(args) => config::run(args),
         Command::Status(args) => status::run(args),
+        Command::Services(args) => services::run(args),
     }
 }

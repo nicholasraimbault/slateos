@@ -18,11 +18,13 @@ pub enum Device {
     PixelTablet,
     /// Google Pixel phones (Tensor) — secondary target.
     PixelPhone,
+    /// Google Pixel Fold (Tensor G2) — secondary target.
+    PixelFold,
+    /// Framework Laptop 12 (x86, touchscreen) — dev machine.
+    Framework12,
     /// Generic x86-64 desktop or laptop — tertiary target.
     #[default]
     GenericX86,
-    /// ONN 11 Tablet Pro (Snapdragon 685) — legacy/experimental.
-    OnnTablet,
 }
 
 impl Device {
@@ -31,17 +33,18 @@ impl Device {
     pub const ALL: &'static [Device] = &[
         Device::PixelTablet,
         Device::PixelPhone,
+        Device::PixelFold,
+        Device::Framework12,
         Device::GenericX86,
-        Device::OnnTablet,
     ];
 
     /// The Rust cross-compilation target triple for this device.
     pub fn cargo_target(self) -> &'static str {
         match self {
-            Device::PixelTablet => "aarch64-unknown-linux-musl",
-            Device::PixelPhone => "aarch64-unknown-linux-musl",
-            Device::GenericX86 => "x86_64-unknown-linux-musl",
-            Device::OnnTablet => "aarch64-unknown-linux-musl",
+            Device::PixelTablet | Device::PixelPhone | Device::PixelFold => {
+                "aarch64-unknown-linux-musl"
+            }
+            Device::Framework12 | Device::GenericX86 => "x86_64-unknown-linux-musl",
         }
     }
 
@@ -50,14 +53,14 @@ impl Device {
         self.cargo_target().starts_with("aarch64")
     }
 
-    /// Human-readable device description.
+    /// Whether this device has a touchscreen.
     #[cfg(test)]
-    pub fn description(self) -> &'static str {
+    pub fn has_touch(self) -> bool {
         match self {
-            Device::PixelTablet => "Google Pixel Tablet (Tensor G2) — primary target",
-            Device::PixelPhone => "Google Pixel Phone (Tensor) — secondary target",
-            Device::GenericX86 => "Generic x86-64 desktop/laptop — tertiary target",
-            Device::OnnTablet => "ONN 11 Tablet Pro (Snapdragon 685) — legacy/experimental",
+            Device::PixelTablet | Device::PixelPhone | Device::PixelFold | Device::Framework12 => {
+                true
+            }
+            Device::GenericX86 => false,
         }
     }
 }
@@ -67,8 +70,9 @@ impl fmt::Display for Device {
         match self {
             Device::PixelTablet => write!(f, "pixel-tablet"),
             Device::PixelPhone => write!(f, "pixel-phone"),
+            Device::PixelFold => write!(f, "pixel-fold"),
+            Device::Framework12 => write!(f, "framework-12"),
             Device::GenericX86 => write!(f, "generic-x86"),
-            Device::OnnTablet => write!(f, "onn-tablet"),
         }
     }
 }
@@ -98,7 +102,20 @@ mod tests {
     fn aarch64_devices_need_cross_compile() {
         assert!(Device::PixelTablet.needs_cross_compile());
         assert!(Device::PixelPhone.needs_cross_compile());
-        assert!(Device::OnnTablet.needs_cross_compile());
+        assert!(Device::PixelFold.needs_cross_compile());
+    }
+
+    #[test]
+    fn x86_devices_do_not_need_cross_compile() {
+        assert!(!Device::Framework12.needs_cross_compile());
+    }
+
+    #[test]
+    fn touch_devices() {
+        assert!(Device::PixelTablet.has_touch());
+        assert!(Device::PixelFold.has_touch());
+        assert!(Device::Framework12.has_touch());
+        assert!(!Device::GenericX86.has_touch());
     }
 
     #[test]
@@ -108,9 +125,9 @@ mod tests {
 
     #[test]
     fn display_matches_clap_value_enum_names() {
-        // Ensures Display output is consistent for UX messages.
         assert_eq!(Device::GenericX86.to_string(), "generic-x86");
         assert_eq!(Device::PixelTablet.to_string(), "pixel-tablet");
-        assert_eq!(Device::OnnTablet.to_string(), "onn-tablet");
+        assert_eq!(Device::PixelFold.to_string(), "pixel-fold");
+        assert_eq!(Device::Framework12.to_string(), "framework-12");
     }
 }

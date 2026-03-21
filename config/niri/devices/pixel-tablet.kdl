@@ -1,0 +1,124 @@
+// Slate OS — Niri Configuration
+// Target: Google Pixel Tablet (Tensor G2, 2560x1600 @ 60Hz)
+// Display: eDP-1 (internal panel, landscape native)
+
+output "eDP-1" {
+    mode "2560x1600@60.000"
+    // 2560x1600 at 2x scale → 1280x800 logical pixels
+    scale 2.0
+}
+
+// Input — Pixel Tablet has a capacitive touchscreen
+input {
+    touch {
+        map-to-output "eDP-1"
+    }
+    touchpad {
+        tap
+        natural-scroll
+    }
+}
+
+// Layout — tablet-first: full-width windows, tight gaps
+layout {
+    gaps 8
+    center-focused-column "never"
+
+    border {
+        width 2
+        active-color "#6495ED"
+        inactive-color "#2A2A36"
+    }
+
+    default-column-width { proportion 1.0; }
+
+    // Reserve space for Waybar (top) and dock (bottom)
+    struts {
+        top 36
+        bottom 56
+    }
+}
+
+// Animations — snappy spring physics tuned for 60Hz touch
+animations {
+    workspace-switch {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    horizontal-view-movement {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-open {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-close {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-resize {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+}
+
+// Audio
+spawn-at-startup "pipewire"
+spawn-at-startup "pipewire-pulse"
+spawn-at-startup "wireplumber"
+
+// Shell apps
+spawn-at-startup "swaybg" "-i" "/usr/share/backgrounds/slate-default.jpg" "-m" "fill"
+spawn-at-startup "waybar"
+spawn-at-startup "slate-palette"
+spawn-at-startup "touchflow"
+spawn-at-startup "shoal"
+spawn-at-startup "wvkbd-slate" "--hidden"
+spawn-at-startup "slate-suggest"
+
+// Window rules — all apps open maximized on tablet
+window-rule {
+    match app-id="firefox"
+    default-column-width { proportion 1.0; }
+    open-maximized true
+}
+
+window-rule {
+    match app-id="Alacritty"
+    default-column-width { proportion 1.0; }
+}
+
+// Keyboard bindings (for hub keyboard or Bluetooth)
+binds {
+    Mod+Left  { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Up    { focus-window-up; }
+    Mod+Down  { focus-window-down; }
+
+    Mod+Shift+Left  { move-column-left; }
+    Mod+Shift+Right { move-column-right; }
+
+    Mod+F { maximize-column; }
+    Mod+Shift+F { fullscreen-window; }
+
+    Mod+1 { focus-workspace 1; }
+    Mod+2 { focus-workspace 2; }
+    Mod+3 { focus-workspace 3; }
+
+    Mod+Return { spawn "alacritty"; }
+    Mod+D { spawn "fuzzel"; }
+    Mod+B { spawn "firefox"; }
+
+    Mod+Q { close-window; }
+    Mod+Tab { toggle-overview; }
+    Mod+Shift+E { quit; }
+
+    Print { screenshot; }
+    Mod+Print { screenshot-window; }
+}
+
+// Direct scanout for fullscreen apps
+debug {
+    enable-overlay-planes
+}
+
+cursor {
+    hide-when-typing
+    hide-after-inactive-ms 3000
+}

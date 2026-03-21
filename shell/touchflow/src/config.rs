@@ -97,11 +97,12 @@ pub struct EdgeCfg {
 
 impl Default for EdgeCfg {
     fn default() -> Self {
-        // ONN 11 Tablet Pro: 1280x1840 native resolution
+        // Pixel Tablet default: 2560x1600 native, but touchflow works
+        // in logical pixels after compositor scaling.
         Self {
             size: 50,
-            screen_width: 1280,
-            screen_height: 1840,
+            screen_width: 2560,
+            screen_height: 1600,
         }
     }
 }
@@ -145,8 +146,8 @@ mod tests {
         assert!(cfg.gestures.pinch_enabled);
         assert!(cfg.gestures.edge_swipe_enabled);
         assert_eq!(cfg.edge.size, 50);
-        assert_eq!(cfg.edge.screen_width, 1280);
-        assert_eq!(cfg.edge.screen_height, 1840);
+        assert_eq!(cfg.edge.screen_width, 2560);
+        assert_eq!(cfg.edge.screen_height, 1600);
         assert!(cfg.niri.socket_path.is_none());
     }
 

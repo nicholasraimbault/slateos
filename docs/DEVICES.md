@@ -3,10 +3,11 @@
 ## Pixel Tablet (Primary)
 
 - **SoC:** Google Tensor G2
+- **Display:** 2560x1600 @ 60Hz
 - **Status:** In development
 - **Boot:** Fastboot, unlockable bootloader
-- **Kernel:** TBD
-- **Notes:** Primary development target. Tensor G2 has good upstream Linux support via ChromeOS kernel trees.
+- **Kernel:** TBD (ChromeOS kernel tree as starting point)
+- **Notes:** Primary development target. Tensor G2 has upstream Linux support via ChromeOS kernel trees. Google is actively upstreaming Tensor support (GS101/Pixel 6 landed in Linux 6.8).
 
 ## Pixel Phones
 
@@ -17,17 +18,7 @@
 
 ## Generic x86 Desktop/Laptop
 
-- **Status:** Planned
+- **Status:** Active (development target)
 - **Boot:** Standard UEFI
 - **Kernel:** Mainline Linux
-- **Notes:** Standard Chimera Linux install with SlateOS shell overlay. Simplest target — no vendor blobs, standard drivers.
-
-## ONN 11 Tablet Pro 2024 (Legacy)
-
-- **SoC:** Qualcomm SM6225 (Snapdragon 685), Adreno 610
-- **RAM:** 4GB
-- **Display:** 1280x1840 @ 90Hz (DSI)
-- **Status:** Experimental / legacy
-- **Boot:** Fastboot (A/B slots), boot image v4 header
-- **Kernel:** GKI 5.15 + vendor modules from vendor_boot
-- **Notes:** Original development device. Requires vendor blobs and kernel modules from stock firmware. Hardware setup service handles mknod for DRM/input devices. Device-specific services in `services/devices/onn-tablet/`.
+- **Notes:** Standard Chimera Linux install with SlateOS shell overlay. Simplest target — no vendor blobs, standard drivers. Primary development environment before real hardware is available.

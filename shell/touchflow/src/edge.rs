@@ -26,11 +26,10 @@ pub struct EdgeConfig {
 
 impl Default for EdgeConfig {
     fn default() -> Self {
-        // ONN 11 Tablet Pro: 1280x1840 native resolution
         Self {
             size: 50,
-            screen_width: 1280,
-            screen_height: 1840,
+            screen_width: 2560,
+            screen_height: 1600,
         }
     }
 }
@@ -94,11 +93,10 @@ mod tests {
     #[test]
     fn right_edge() {
         let cfg = default_config();
-        // 1280 wide: right edge zone starts at 1280 - 50 = 1230
-        assert_eq!(classify_edge(1270, 900, &cfg), Some(Edge::Right));
-        assert_eq!(classify_edge(1279, 900, &cfg), Some(Edge::Right));
-        // Just inside edge zone
-        assert_eq!(classify_edge(1231, 900, &cfg), Some(Edge::Right));
+        // 2560 wide: right edge zone starts at 2560 - 50 = 2510
+        assert_eq!(classify_edge(2550, 800, &cfg), Some(Edge::Right));
+        assert_eq!(classify_edge(2559, 800, &cfg), Some(Edge::Right));
+        assert_eq!(classify_edge(2511, 800, &cfg), Some(Edge::Right));
     }
 
     #[test]

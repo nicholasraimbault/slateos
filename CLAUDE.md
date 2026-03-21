@@ -7,8 +7,9 @@ Based on Chimera Linux (musl, LLVM/Clang, apk) with a custom touch-first shell b
 ## Target Devices
 - **Pixel Tablet** (Tensor G2) — primary target
 - **Pixel phones** (Tensor) — secondary target
-- **x86 desktop/laptop** — tertiary target
-- **ONN 11 Tablet Pro** (Snapdragon 685) — legacy/experimental
+- **Pixel Fold** (Tensor G2) — secondary target
+- **Framework Laptop 12** (x86, touchscreen) — dev machine / tertiary target
+- **Generic x86 desktop/laptop** — tertiary target
 
 ## Base System
 - Distro: Chimera Linux (musl libc, LLVM/Clang toolchain)
@@ -43,14 +44,16 @@ slateos/
 │   ├── slate-suggest/        ← keyboard suggestion bar (iced + layer-shell)
 │   ├── slate-settings/       ← settings app (iced, settings.toml)
 │   └── slate-power/          ← power button monitor (suspend/poweroff)
+├── tools/
+│   └── slate/                ← slate CLI (build, status, flash, config, services)
 ├── services/                 ← arkhe service configs
 │   ├── base/                 ← services for all devices
 │   └── devices/              ← device-specific overrides
 ├── config/                   ← system configs (niri, waybar, wvkbd, nftables, sysctl)
+│   └── niri/devices/         ← per-device niri configs
 ├── build/                    ← build scripts
-│   ├── build-rootfs.sh       ← Chimera rootfs builder (generic)
-│   ├── first-boot.sh         ← first boot setup
-│   └── devices/              ← device-specific build/flash scripts
+│   ├── build-rootfs.sh       ← Chimera rootfs builder (device-aware)
+│   └── first-boot.sh         ← first boot setup
 └── docs/                     ← documentation
 ```
 
@@ -97,10 +100,12 @@ slate-settings ← iced app, depends on slate-common
 cargo build --workspace
 
 # Build Chimera rootfs (run on aarch64 or x86_64 with qemu-user-static)
-bash build/build-rootfs.sh
+bash build/build-rootfs.sh /path/to/rootfs /path/to/output.tar.gz pixel-tablet
 
-# Flash device (device-specific)
-bash build/devices/onn-tablet/flash-tablet.sh
+# Use the slate CLI
+cargo run -p slate -- build
+cargo run -p slate -- status
+cargo run -p slate -- services
 ```
 
 arkhe binaries come from ~/Projects/arkhe cross-compile.
