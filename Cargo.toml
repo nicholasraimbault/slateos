@@ -49,3 +49,9 @@ tracing-subscriber = "0.3"
 
 # File watching
 notify = "7"
+
+# Workspace-wide release profile (applies to all crates)
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
