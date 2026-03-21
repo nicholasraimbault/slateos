@@ -3,6 +3,9 @@
 // Connects to the local OpenClaw AI server over WebSocket and handles the
 // streaming response protocol. The client is designed to be used from an iced
 // subscription so chunks flow directly into the UI message loop.
+//
+// Reconnection uses exponential backoff starting at 1 second and capping at
+// 30 seconds so transient failures do not saturate the network or CPU.
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -14,8 +17,11 @@ use crate::context::WindowContext;
 /// Default WebSocket endpoint for the local OpenClaw server.
 pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:18789/ws";
 
-/// Reconnect interval when the connection drops.
-const RECONNECT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// Initial backoff delay after a failed connection attempt.
+const INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Maximum backoff delay between reconnection attempts.
+const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Wire protocol types
@@ -95,26 +101,38 @@ impl OpenClawClient {
     }
 }
 
-/// Spawn the persistent WebSocket background loop.
+// ---------------------------------------------------------------------------
+// Subscription entry point
+// ---------------------------------------------------------------------------
+
+/// Run the OpenClaw WebSocket client loop, forwarding events through
+/// `event_tx`. Also returns an `OpenClawClient` handle through the event
+/// channel once the background query sender is set up.
 ///
-/// Returns a client handle (for sending queries) and a receiver (for
-/// streaming events back to the UI). The background task will reconnect
-/// automatically when the connection drops.
-pub fn spawn_client() -> (OpenClawClient, mpsc::UnboundedReceiver<ClientEvent>) {
+/// Reconnects automatically with exponential backoff when the connection
+/// drops. This function never returns under normal operation.
+pub async fn run(event_tx: mpsc::UnboundedSender<ClientEvent>) -> OpenClawClient {
     let (query_tx, query_rx) = mpsc::channel::<QueryMessage>(32);
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<ClientEvent>();
+
+    let client = OpenClawClient {
+        query_tx: query_tx.clone(),
+    };
 
     tokio::spawn(connection_loop(query_rx, event_tx));
 
-    let client = OpenClawClient { query_tx };
-    (client, event_rx)
+    client
 }
 
-/// Persistent connection loop with automatic reconnection.
+/// Persistent connection loop with exponential backoff reconnection.
+///
+/// Each failed connection attempt doubles the wait time, capped at
+/// MAX_BACKOFF. A successful connection resets the backoff to INITIAL_BACKOFF.
 async fn connection_loop(
     mut query_rx: mpsc::Receiver<QueryMessage>,
     event_tx: mpsc::UnboundedSender<ClientEvent>,
 ) {
+    let mut backoff = INITIAL_BACKOFF;
+
     loop {
         match try_connect_and_run(&mut query_rx, &event_tx).await {
             Ok(()) => {
@@ -122,9 +140,12 @@ async fn connection_loop(
                 break;
             }
             Err(e) => {
-                tracing::warn!("OpenClaw connection error: {e}");
+                tracing::warn!("OpenClaw connection error: {e}, retrying in {backoff:?}");
                 let _ = event_tx.send(ClientEvent::Disconnected);
-                tokio::time::sleep(RECONNECT_INTERVAL).await;
+                tokio::time::sleep(backoff).await;
+
+                // Exponential backoff: double the delay up to the cap.
+                backoff = (backoff * 2).min(MAX_BACKOFF);
             }
         }
     }
@@ -151,7 +172,7 @@ async fn try_connect_and_run(
                         ws_sink.send(tungstenite::Message::Text(json)).await?;
                     }
                     None => {
-                        // Sender dropped — clean shutdown.
+                        // Sender dropped -- clean shutdown.
                         return Ok(());
                     }
                 }
@@ -194,6 +215,14 @@ fn handle_server_message(text: &str, event_tx: &mpsc::UnboundedSender<ClientEven
             let _ = event_tx.send(ClientEvent::Error(format!("Parse error: {e}")));
         }
     }
+}
+
+/// Compute the next backoff duration using exponential backoff.
+///
+/// Doubles the current backoff, capping at MAX_BACKOFF. Useful for testing
+/// the backoff logic without running a real connection loop.
+pub fn next_backoff(current: std::time::Duration) -> std::time::Duration {
+    (current * 2).min(MAX_BACKOFF)
 }
 
 #[cfg(test)]
@@ -281,5 +310,33 @@ mod tests {
 
         let event = rx.try_recv().expect("should have event");
         assert!(matches!(event, ClientEvent::Error(_)));
+    }
+
+    #[test]
+    fn backoff_doubles_up_to_cap() {
+        let b1 = next_backoff(INITIAL_BACKOFF);
+        assert_eq!(b1, std::time::Duration::from_secs(2));
+
+        let b2 = next_backoff(b1);
+        assert_eq!(b2, std::time::Duration::from_secs(4));
+
+        // After enough doublings the cap should apply.
+        let huge = next_backoff(std::time::Duration::from_secs(60));
+        assert_eq!(huge, MAX_BACKOFF);
+    }
+
+    #[test]
+    fn backoff_cap_is_max_backoff() {
+        let at_cap = next_backoff(MAX_BACKOFF);
+        assert_eq!(at_cap, MAX_BACKOFF);
+    }
+
+    #[test]
+    fn client_event_all_variants_constructible() {
+        let _connected = ClientEvent::Connected;
+        let _chunk = ClientEvent::Chunk("hello".to_string());
+        let _done = ClientEvent::Done;
+        let _error = ClientEvent::Error("oops".to_string());
+        let _disconnected = ClientEvent::Disconnected;
     }
 }

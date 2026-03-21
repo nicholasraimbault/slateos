@@ -1,8 +1,13 @@
-// Claw Panel — OpenClaw AI sidebar for Slate OS.
+// Claw Panel -- OpenClaw AI sidebar for Slate OS.
 //
 // A right-anchored layer-shell panel that provides context-aware AI
 // assistance through the local OpenClaw server. All intelligence lives
 // server-side; this crate is the touch-friendly Wayland UI shell.
+//
+// Subscriptions:
+//   1. D-Bus listener  -- palette changes + show/hide/toggle from TouchFlow
+//   2. OpenClaw client  -- streaming WebSocket responses from the AI server
+//   3. Context poll     -- periodic focused-window check via niri IPC
 
 // Most runtime infrastructure (D-Bus, WebSocket, message variants) appears
 // dead on macOS because the full wiring only runs on Linux with a live
@@ -26,6 +31,9 @@ use slate_common::Palette;
 #[cfg(target_os = "linux")]
 use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
 
+/// Context poll interval: how often we check which window the user is focused on.
+const CONTEXT_POLL_SECS: u64 = 2;
+
 // ---------------------------------------------------------------------------
 // Application state
 // ---------------------------------------------------------------------------
@@ -39,10 +47,6 @@ struct ClawPanel {
     input_text: String,
     openclaw_client: Option<OpenClawClient>,
     is_streaming: bool,
-    // Channel receivers held as Options so they can be .take()-en into
-    // subscriptions without requiring mutability in view().
-    dbus_rx: Option<tokio::sync::mpsc::UnboundedReceiver<dbus_listener::DbusEvent>>,
-    openclaw_rx: Option<tokio::sync::mpsc::UnboundedReceiver<ClientEvent>>,
 }
 
 impl Default for ClawPanel {
@@ -56,8 +60,6 @@ impl Default for ClawPanel {
             input_text: String::new(),
             openclaw_client: None,
             is_streaming: false,
-            dbus_rx: None,
-            openclaw_rx: None,
         }
     }
 }
@@ -102,6 +104,9 @@ enum Message {
 
     // OpenClaw client event forwarding
     OpenClawEvent(ClientEvent),
+
+    // The OpenClaw client handle has been created by the background task.
+    OpenClawClientReady(OpenClawClient),
 }
 
 // On Linux the message must be convertible to LayershellCustomActions. When no
@@ -115,7 +120,7 @@ impl TryInto<iced_layershell::actions::LayershellCustomActions> for Message {
 }
 
 // ---------------------------------------------------------------------------
-// Application trait implementation (Linux — layer shell)
+// Application trait implementation (Linux -- layer shell)
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "linux")]
@@ -227,7 +232,7 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
                 );
             }
 
-            // No client connected — show an error inline.
+            // No client connected -- show an error inline.
             app.conversation
                 .add_assistant_message("OpenClaw unavailable".to_string());
             app.is_streaming = false;
@@ -300,6 +305,10 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
                 tracing::warn!("Disconnected from OpenClaw");
             }
         },
+        Message::OpenClawClientReady(client) => {
+            tracing::info!("OpenClaw client handle ready");
+            app.openclaw_client = Some(client);
+        }
     }
 
     iced::Task::none()
@@ -323,9 +332,92 @@ fn view_app(app: &ClawPanel) -> iced::Element<'_, Message> {
     .map(Message::PanelAction)
 }
 
+/// Build all iced subscriptions: D-Bus events, OpenClaw WebSocket, and
+/// periodic context polling.
 fn subscription_app(_app: &ClawPanel) -> iced::Subscription<Message> {
-    // Context polling: every 1 second.
-    iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::ContextPollTick)
+    let dbus_sub = dbus_subscription();
+    let openclaw_sub = openclaw_subscription();
+    let context_sub = iced::time::every(std::time::Duration::from_secs(CONTEXT_POLL_SECS))
+        .map(|_| Message::ContextPollTick);
+
+    iced::Subscription::batch([dbus_sub, openclaw_sub, context_sub])
+}
+
+/// Subscription that runs the D-Bus listener and forwards events as Messages.
+///
+/// Uses `iced::stream::channel` with a stable subscription ID so the stream
+/// is created exactly once and persists for the lifetime of the app.
+fn dbus_subscription() -> iced::Subscription<Message> {
+    use iced::futures::SinkExt;
+
+    let stream = iced::stream::channel(50, |mut output| async move {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Start the D-Bus listener in a background task.
+        tokio::spawn(dbus_listener::run(event_tx));
+
+        // Forward D-Bus events into the iced message stream.
+        loop {
+            match event_rx.recv().await {
+                Some(event) => {
+                    let msg = Message::DbusEvent(event);
+                    // Await back-pressure from the iced runtime.
+                    if output.send(msg).await.is_err() {
+                        tracing::warn!("D-Bus subscription channel closed");
+                        break;
+                    }
+                }
+                None => {
+                    // Channel closed -- the D-Bus listener task ended.
+                    tracing::warn!("D-Bus event channel closed unexpectedly");
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    });
+
+    iced::Subscription::run_with_id("claw-panel-dbus", stream)
+}
+
+/// Subscription that runs the OpenClaw WebSocket client and forwards events
+/// as Messages.
+///
+/// On the first iteration, this spawns the WebSocket background loop and
+/// sends an `OpenClawClientReady` message so the app can store the client
+/// handle for sending queries.
+fn openclaw_subscription() -> iced::Subscription<Message> {
+    use iced::futures::SinkExt;
+
+    let stream = iced::stream::channel(100, |mut output| async move {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Spawn the WebSocket background loop and get a client handle.
+        let client = openclaw::run(event_tx).await;
+
+        // Inform the app that the client handle is ready for sending queries.
+        let _ = output.send(Message::OpenClawClientReady(client)).await;
+
+        // Forward OpenClaw events into the iced message stream.
+        loop {
+            match event_rx.recv().await {
+                Some(event) => {
+                    let msg = Message::OpenClawEvent(event);
+                    // Await back-pressure from the iced runtime.
+                    if output.send(msg).await.is_err() {
+                        tracing::warn!("OpenClaw subscription channel closed");
+                        break;
+                    }
+                }
+                None => {
+                    // Channel closed -- the WebSocket loop ended.
+                    tracing::warn!("OpenClaw event channel closed unexpectedly");
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    });
+
+    iced::Subscription::run_with_id("claw-panel-openclaw", stream)
 }
 
 // ---------------------------------------------------------------------------
@@ -368,5 +460,197 @@ fn main() {
         if let Err(e) = ClawPanel::run_fallback() {
             tracing::error!("Claw Panel exited with error: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_panel_is_hidden() {
+        let panel = ClawPanel::default();
+        assert!(!panel.visible);
+    }
+
+    #[test]
+    fn update_show_sets_visible() {
+        let mut panel = ClawPanel::default();
+        let _ = update_app(&mut panel, Message::Show);
+        assert!(panel.visible);
+    }
+
+    #[test]
+    fn update_hide_clears_visible() {
+        let mut panel = ClawPanel::default();
+        panel.visible = true;
+        let _ = update_app(&mut panel, Message::Hide);
+        assert!(!panel.visible);
+    }
+
+    #[test]
+    fn update_toggle_flips_visibility() {
+        let mut panel = ClawPanel::default();
+        assert!(!panel.visible);
+
+        let _ = update_app(&mut panel, Message::ToggleVisibility);
+        assert!(panel.visible);
+
+        let _ = update_app(&mut panel, Message::ToggleVisibility);
+        assert!(!panel.visible);
+    }
+
+    #[test]
+    fn update_palette_changed_stores_palette() {
+        let mut panel = ClawPanel::default();
+        let new_palette = Palette {
+            primary: [255, 0, 0, 255],
+            ..Palette::default()
+        };
+        let _ = update_app(&mut panel, Message::PaletteChanged(new_palette.clone()));
+        assert_eq!(panel.palette, new_palette);
+    }
+
+    #[test]
+    fn update_input_changed_stores_text() {
+        let mut panel = ClawPanel::default();
+        let _ = update_app(&mut panel, Message::InputChanged("hello".to_string()));
+        assert_eq!(panel.input_text, "hello");
+    }
+
+    #[test]
+    fn update_send_on_empty_input_does_nothing() {
+        let mut panel = ClawPanel::default();
+        panel.input_text = "   ".to_string();
+        let _ = update_app(&mut panel, Message::Send);
+        assert!(panel.conversation.is_empty());
+        assert!(!panel.is_streaming);
+    }
+
+    #[test]
+    fn update_send_without_client_adds_error_message() {
+        let mut panel = ClawPanel::default();
+        panel.input_text = "test query".to_string();
+        let _ = update_app(&mut panel, Message::Send);
+
+        assert_eq!(panel.conversation.len(), 2);
+        assert!(!panel.is_streaming);
+        assert!(panel.input_text.is_empty());
+    }
+
+    #[test]
+    fn update_resize_clamps_width() {
+        let mut panel = ClawPanel::default();
+        let _ = update_app(&mut panel, Message::Resize(100));
+        assert_eq!(panel.panel_width, panel::MIN_WIDTH);
+
+        let _ = update_app(&mut panel, Message::Resize(9999));
+        assert_eq!(panel.panel_width, panel::MAX_WIDTH);
+
+        let _ = update_app(&mut panel, Message::Resize(500));
+        assert_eq!(panel.panel_width, 500);
+    }
+
+    #[test]
+    fn update_dbus_show_sets_visible() {
+        let mut panel = ClawPanel::default();
+        let _ = update_app(
+            &mut panel,
+            Message::DbusEvent(dbus_listener::DbusEvent::Show),
+        );
+        assert!(panel.visible);
+    }
+
+    #[test]
+    fn update_dbus_toggle_flips_visibility() {
+        let mut panel = ClawPanel::default();
+        let _ = update_app(
+            &mut panel,
+            Message::DbusEvent(dbus_listener::DbusEvent::Toggle),
+        );
+        assert!(panel.visible);
+
+        let _ = update_app(
+            &mut panel,
+            Message::DbusEvent(dbus_listener::DbusEvent::Toggle),
+        );
+        assert!(!panel.visible);
+    }
+
+    #[test]
+    fn update_dbus_palette_updates_theme() {
+        let mut panel = ClawPanel::default();
+        let custom = Palette {
+            primary: [0, 255, 0, 255],
+            ..Palette::default()
+        };
+        let _ = update_app(
+            &mut panel,
+            Message::DbusEvent(dbus_listener::DbusEvent::PaletteChanged(custom.clone())),
+        );
+        assert_eq!(panel.palette, custom);
+    }
+
+    #[test]
+    fn update_openclaw_chunk_appends_text() {
+        let mut panel = ClawPanel::default();
+        panel.is_streaming = true;
+        let _ = update_app(
+            &mut panel,
+            Message::OpenClawEvent(ClientEvent::Chunk("hello ".to_string())),
+        );
+        let _ = update_app(
+            &mut panel,
+            Message::OpenClawEvent(ClientEvent::Chunk("world".to_string())),
+        );
+        assert_eq!(panel.conversation.len(), 1);
+        assert_eq!(panel.conversation.messages()[0].content, "hello world");
+    }
+
+    #[test]
+    fn update_openclaw_done_stops_streaming() {
+        let mut panel = ClawPanel::default();
+        panel.is_streaming = true;
+        let _ = update_app(&mut panel, Message::OpenClawEvent(ClientEvent::Done));
+        assert!(!panel.is_streaming);
+    }
+
+    #[test]
+    fn update_openclaw_error_stops_streaming_and_shows_error() {
+        let mut panel = ClawPanel::default();
+        panel.is_streaming = true;
+        let _ = update_app(
+            &mut panel,
+            Message::OpenClawEvent(ClientEvent::Error("timeout".to_string())),
+        );
+        assert!(!panel.is_streaming);
+        assert_eq!(panel.conversation.len(), 1);
+    }
+
+    #[test]
+    fn update_context_updated_stores_context() {
+        let mut panel = ClawPanel::default();
+        let ctx = WindowContext {
+            app_id: "firefox".to_string(),
+            title: "GitHub".to_string(),
+        };
+        let _ = update_app(&mut panel, Message::ContextUpdated(Some(ctx.clone())));
+        assert_eq!(panel.current_context, Some(ctx));
+    }
+
+    #[test]
+    fn update_panel_action_close_hides() {
+        let mut panel = ClawPanel::default();
+        panel.visible = true;
+        let _ = update_app(&mut panel, Message::PanelAction(PanelAction::Close));
+        assert!(!panel.visible);
+    }
+
+    #[test]
+    fn context_poll_interval_is_reasonable() {
+        assert!(
+            CONTEXT_POLL_SECS >= 1 && CONTEXT_POLL_SECS <= 10,
+            "context poll interval should be between 1 and 10 seconds"
+        );
     }
 }
