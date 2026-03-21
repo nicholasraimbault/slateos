@@ -25,14 +25,23 @@ Kernel (device-specific)
   │     └── IPC socket for shell communication
   │
   └── Shell components (Rust, iced + layer-shell)
-        ├── shoal — dock (bottom bar, magnification)
-        ├── slate-launcher — app launcher (fullscreen grid)
-        ├── claw-panel — AI sidebar (WebSocket to OpenClaw)
-        ├── slate-suggest — keyboard suggestion bar
-        ├── slate-palette — theming daemon (wallpaper → colors)
-        ├── touchflow — gesture daemon (evdev → niri IPC)
-        ├── slate-settings — settings app
-        └── slate-power — power button monitor
+        ├── shoal — dock (bottom bar, magnification, context menus, pin/unpin)
+        ├── slate-launcher — app launcher (fullscreen grid, recent apps, search)
+        ├── claw-panel — AI sidebar (WebSocket to OpenClaw, streaming responses)
+        ├── slate-suggest — keyboard suggestion bar (history + LLM suggestions)
+        ├── slate-palette — theming daemon (wallpaper → Material You colors)
+        ├── touchflow — gesture daemon (evdev → niri IPC + D-Bus)
+        ├── slate-settings — settings app (WiFi, display, gestures, AI, FEX)
+        └── slate-power — power button monitor (suspend/poweroff)
+
+Developer tools:
+  └── slate CLI (tools/slate/)
+        ├── slate build — compile shell crates (workspace or single crate)
+        ├── slate check — run check + clippy + test in one command
+        ├── slate status — show build state for all crates
+        ├── slate services — list/inspect arkhe service definitions
+        ├── slate config — read/write persistent CLI configuration
+        └── slate flash — flash device (scaffold)
 ```
 
 ## Boot Chain
