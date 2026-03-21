@@ -272,9 +272,9 @@ fn run_app() -> anyhow::Result<()> {
 /// layer-shell surface is mapped.
 #[cfg(target_os = "linux")]
 fn run_app() -> anyhow::Result<()> {
-    use iced_layershell::Application as _;
     use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
     use iced_layershell::settings::{LayerShellSettings, Settings};
+    use iced_layershell::Application as _;
 
     let layer_settings = LayerShellSettings {
         // Width must be non-zero to avoid a wgpu swap-chain panic on surface
@@ -332,9 +332,7 @@ fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyh
                         e
                     );
                     last_err = Some(anyhow::anyhow!("{}", e));
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        COMPOSITOR_RETRY_DELAY_MS,
-                    ));
+                    std::thread::sleep(std::time::Duration::from_millis(COMPOSITOR_RETRY_DELAY_MS));
                 } else {
                     // A non-transient error (e.g. wgpu no adapter, protocol
                     // mismatch): log it clearly and fail fast.
@@ -503,10 +501,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn compositor_retry_constants_are_sane() {
-        assert!(
-            COMPOSITOR_CONNECT_RETRIES > 0,
-            "must retry at least once"
-        );
+        assert!(COMPOSITOR_CONNECT_RETRIES > 0, "must retry at least once");
         assert!(
             COMPOSITOR_RETRY_DELAY_MS > 0,
             "delay must be positive to avoid spin-loop"
