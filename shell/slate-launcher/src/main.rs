@@ -15,11 +15,17 @@ mod apps;
 #[allow(dead_code)]
 mod dbus_listener;
 #[allow(dead_code)]
+mod feedback;
+#[allow(dead_code)]
 mod grid;
 #[allow(dead_code)]
 mod launcher;
 #[allow(dead_code)]
+mod recent;
+#[allow(dead_code)]
 mod search;
+#[allow(dead_code)]
+mod view;
 
 use launcher::Launcher;
 #[cfg(target_os = "linux")]
