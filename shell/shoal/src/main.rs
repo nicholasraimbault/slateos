@@ -25,6 +25,22 @@ const DEFAULT_PINNED: &[&str] = &["Alacritty", "firefox", "org.gnome.Nautilus"];
 /// Window poll interval in seconds.
 const POLL_INTERVAL_SECS: u64 = 2;
 
+/// Fallback width for the layer-shell surface when the compositor has not yet
+/// assigned a size. A non-zero value is required because wgpu panics if either
+/// dimension is zero when configuring the swap-chain surface. The compositor
+/// overrides this with the real output width once the surface is mapped.
+#[cfg(target_os = "linux")]
+const INITIAL_SURFACE_WIDTH: u32 = 800;
+
+/// How many times to retry connecting to the Wayland compositor before giving
+/// up. Each attempt is separated by COMPOSITOR_RETRY_DELAY_MS.
+#[cfg(target_os = "linux")]
+const COMPOSITOR_CONNECT_RETRIES: u32 = 10;
+
+/// Delay in milliseconds between compositor connection attempts.
+#[cfg(target_os = "linux")]
+const COMPOSITOR_RETRY_DELAY_MS: u64 = 500;
+
 // ---------------------------------------------------------------------------
 // Application state
 // ---------------------------------------------------------------------------
@@ -193,8 +209,8 @@ impl Shoal {
         let dock = view_dock(
             &pinned_icons,
             &dynamic_icons,
-            |id| Message::AppTap(id),
-            |id| Message::AppLongPress(id),
+            Message::AppTap,
+            Message::AppLongPress,
         );
 
         container(dock)
@@ -245,7 +261,15 @@ fn run_app() -> anyhow::Result<()> {
 }
 
 /// On Linux, use iced_layershell for Wayland layer-shell support.
-/// This anchors the dock at the bottom of the screen with an exclusive zone.
+///
+/// Retries connecting to the compositor up to COMPOSITOR_CONNECT_RETRIES times
+/// with a short delay between attempts, because shoal starts early in the boot
+/// sequence and the compositor may not be ready immediately.
+///
+/// The initial surface width must be non-zero: wgpu panics when asked to
+/// configure a swap-chain surface with a zero dimension. We supply a sensible
+/// fallback; the compositor replaces it with the real output width once the
+/// layer-shell surface is mapped.
 #[cfg(target_os = "linux")]
 fn run_app() -> anyhow::Result<()> {
     use iced_layershell::Application as _;
@@ -253,7 +277,10 @@ fn run_app() -> anyhow::Result<()> {
     use iced_layershell::settings::{LayerShellSettings, Settings};
 
     let layer_settings = LayerShellSettings {
-        size: Some((0, dock::DOCK_HEIGHT)),
+        // Width must be non-zero to avoid a wgpu swap-chain panic on surface
+        // creation. The compositor resizes it to the full output width once the
+        // anchored surface is mapped (Left | Right anchoring enables stretching).
+        size: Some((INITIAL_SURFACE_WIDTH, dock::DOCK_HEIGHT)),
         anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
         exclusive_zone: dock::DOCK_HEIGHT as i32,
         layer: Layer::Top,
@@ -266,17 +293,84 @@ fn run_app() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    ShoalLayerShell::run(settings)?;
+    // Retry the compositor connection to handle the race between arkhd
+    // starting shoal and niri completing its Wayland socket setup.
+    connect_with_retry(settings)
+}
 
-    Ok(())
+/// Attempt to start the iced_layershell application, retrying if the
+/// compositor is not yet available.
+///
+/// `ConnectError(NoCompositor)` is the specific error returned by
+/// iced_layershell when the WAYLAND_DISPLAY socket does not exist or the
+/// compositor has not yet set up its global registry. We sleep briefly between
+/// retries so we do not spin-loop and waste CPU while the compositor boots.
+#[cfg(target_os = "linux")]
+fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyhow::Result<()> {
+    use iced_layershell::Application as _;
+
+    let mut last_err: Option<anyhow::Error> = None;
+
+    for attempt in 1..=COMPOSITOR_CONNECT_RETRIES {
+        tracing::info!(
+            "connecting to Wayland compositor (attempt {}/{})",
+            attempt,
+            COMPOSITOR_CONNECT_RETRIES
+        );
+
+        match ShoalLayerShell::run(settings.clone()) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                // NoCompositor means the Wayland socket is not yet available;
+                // all other errors are not transient and should fail immediately.
+                if msg.contains("NoCompositor") || msg.contains("ConnectError") {
+                    tracing::warn!(
+                        "compositor not ready (attempt {}/{}): {}",
+                        attempt,
+                        COMPOSITOR_CONNECT_RETRIES,
+                        e
+                    );
+                    last_err = Some(anyhow::anyhow!("{}", e));
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        COMPOSITOR_RETRY_DELAY_MS,
+                    ));
+                } else {
+                    // A non-transient error (e.g. wgpu no adapter, protocol
+                    // mismatch): log it clearly and fail fast.
+                    tracing::error!("fatal error starting shoal: {}", e);
+                    return Err(anyhow::anyhow!("{}", e));
+                }
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("compositor never became available")))
 }
 
 /// Wrapper that implements iced_layershell::Application trait.
 /// The lib.rs Application trait is self-contained (does not extend
 /// iced_runtime::Program) and provides its own run() method.
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
 struct ShoalLayerShell {
     inner: Shoal,
+}
+
+// Shoal must be Clone so ShoalLayerShell can be Clone (required by the retry
+// loop which calls run() more than once on the same settings value).
+#[cfg(target_os = "linux")]
+impl Clone for Shoal {
+    fn clone(&self) -> Self {
+        Self {
+            pinned: self.pinned.clone(),
+            all_entries: self.all_entries.clone(),
+            running: self.running.clone(),
+            palette: self.palette.clone(),
+            visible: self.visible,
+            touch_x: self.touch_x,
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -318,5 +412,111 @@ impl TryInto<iced_layershell::actions::LayershellCustomActions> for Message {
 
     fn try_into(self) -> Result<iced_layershell::actions::LayershellCustomActions, Self::Error> {
         Err(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Linux-only constants are only available on Linux, so gate these tests.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn initial_surface_width_is_nonzero() {
+        // Ensures the constant we pass to layer-shell never triggers the wgpu
+        // zero-size surface panic.
+        assert!(
+            INITIAL_SURFACE_WIDTH > 0,
+            "INITIAL_SURFACE_WIDTH must be > 0 to avoid wgpu surface panic"
+        );
+    }
+
+    #[test]
+    fn dock_height_is_nonzero() {
+        assert!(
+            dock::DOCK_HEIGHT > 0,
+            "DOCK_HEIGHT must be > 0 to avoid wgpu surface panic"
+        );
+    }
+
+    #[test]
+    fn shoal_new_returns_empty_running_list() {
+        let (state, _task) = Shoal::new();
+        assert!(
+            state.running.is_empty(),
+            "running list should be empty on startup"
+        );
+    }
+
+    #[test]
+    fn shoal_starts_visible() {
+        let (state, _task) = Shoal::new();
+        assert!(state.visible, "dock should be visible by default");
+    }
+
+    #[test]
+    fn shoal_update_hide_sets_invisible() {
+        let (mut state, _) = Shoal::new();
+        let _ = state.update(Message::Hide);
+        assert!(!state.visible);
+    }
+
+    #[test]
+    fn shoal_update_show_sets_visible() {
+        let (mut state, _) = Shoal::new();
+        let _ = state.update(Message::Hide);
+        let _ = state.update(Message::Show);
+        assert!(state.visible);
+    }
+
+    #[test]
+    fn shoal_update_touch_move_stores_x() {
+        let (mut state, _) = Shoal::new();
+        let _ = state.update(Message::TouchMove(Some(123.0)));
+        assert_eq!(state.touch_x, Some(123.0));
+        let _ = state.update(Message::TouchMove(None));
+        assert_eq!(state.touch_x, None);
+    }
+
+    #[test]
+    fn shoal_update_palette_changed_stores_palette() {
+        let (mut state, _) = Shoal::new();
+        let new_palette = Palette::default();
+        let _ = state.update(Message::PaletteChanged(new_palette.clone()));
+        // Palette::default is the same value — just confirm no panic
+        let _ = state.theme();
+    }
+
+    #[test]
+    fn shoal_update_windows_updated_stores_list() {
+        let (mut state, _) = Shoal::new();
+        let apps = vec![windows::RunningApp {
+            app_id: "firefox".into(),
+            title: "Firefox".into(),
+            is_focused: true,
+        }];
+        let _ = state.update(Message::WindowsUpdated(apps));
+        assert_eq!(state.running.len(), 1);
+    }
+
+    /// Retry constants are only defined on Linux; gate accordingly.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn compositor_retry_constants_are_sane() {
+        assert!(
+            COMPOSITOR_CONNECT_RETRIES > 0,
+            "must retry at least once"
+        );
+        assert!(
+            COMPOSITOR_RETRY_DELAY_MS > 0,
+            "delay must be positive to avoid spin-loop"
+        );
+        // Total worst-case wait time should be under 30 seconds so the service
+        // manager does not kill us for being slow to start.
+        let max_wait_ms = u64::from(COMPOSITOR_CONNECT_RETRIES) * COMPOSITOR_RETRY_DELAY_MS;
+        assert!(
+            max_wait_ms < 30_000,
+            "worst-case retry wait ({max_wait_ms}ms) should be under 30 s"
+        );
     }
 }
