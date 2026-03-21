@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Build wvkbd with Slate OS custom layout
 # Prerequisites: wvkbd source, wayland-protocols, pango, cairo
 #
@@ -25,7 +25,7 @@ fi
 
 # Verify required build dependencies
 for cmd in make pkg-config; do
-	if ! command -v "$cmd" &>/dev/null; then
+	if ! command -v "$cmd" >/dev/null 2>&1; then
 		echo "Error: $cmd not found. Install build dependencies first."
 		exit 1
 	fi
@@ -63,7 +63,7 @@ if [ -f "$BINARY" ]; then
 	echo "Build successful: $BINARY"
 	echo ""
 	echo "Install with:"
-	echo "  sudo install -Dm755 $BINARY /usr/bin/wvkbd-slate"
+	echo "  doas install -Dm755 $BINARY /usr/bin/wvkbd-slate"
 	echo ""
 	echo "Run with:"
 	echo "  wvkbd-slate"
