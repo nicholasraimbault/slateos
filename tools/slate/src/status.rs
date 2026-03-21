@@ -91,14 +91,17 @@ fn print_device_section(device: &Device) {
     println!("  Target device");
     println!("    device  : {device}");
     println!("    triple  : {}", device.cargo_target());
-    println!(
-        "    cross   : {}",
-        if device.needs_cross_compile() {
-            "yes (not yet implemented)"
+
+    if device.needs_cross_compile() {
+        let status = crate::cross::check_cross_toolchain(device.cargo_target());
+        if status.ready {
+            println!("    cross   : yes (toolchain ready)");
         } else {
-            "no (native)"
+            println!("    cross   : yes (toolchain not configured)");
         }
-    );
+    } else {
+        println!("    cross   : no (native)");
+    }
 }
 
 fn print_crate_section(repo_root: &Option<PathBuf>, device: &Device) {

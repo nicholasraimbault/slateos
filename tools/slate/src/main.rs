@@ -12,6 +12,7 @@
 mod build;
 mod check;
 mod config;
+mod cross;
 mod dev;
 mod device;
 mod flash;
