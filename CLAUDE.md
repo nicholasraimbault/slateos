@@ -111,6 +111,7 @@ cargo run -p slate -- services
 arkhe binaries come from ~/Projects/arkhe cross-compile.
 
 ## Verification Commands
+- cargo run -p slate -- check (runs check + clippy + test in one command)
 - cargo check --workspace
 - cargo clippy --workspace -- -D warnings
 - cargo test --workspace
