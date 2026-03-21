@@ -242,7 +242,10 @@ fn print_success(args: &BuildArgs, out_dir: &Path) {
 
     println!();
     println!("  Next steps:");
-    println!("    slate flash --device {}   (once flash is implemented)", args.device);
+    println!(
+        "    slate flash --device {}   (once flash is implemented)",
+        args.device
+    );
     println!();
 }
 

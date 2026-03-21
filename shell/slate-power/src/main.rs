@@ -53,8 +53,14 @@ static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 fn install_signal_handler() {
     // Safety: writing an atomic bool from a signal handler is async-signal-safe.
     unsafe {
-        libc::signal(libc::SIGTERM, sigterm_handler as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGINT, sigterm_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            sigterm_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            sigterm_handler as *const () as libc::sighandler_t,
+        );
     }
 }
 

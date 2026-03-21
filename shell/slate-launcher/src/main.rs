@@ -118,9 +118,7 @@ fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyh
                         e
                     );
                     last_err = Some(anyhow::anyhow!("{}", e));
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        COMPOSITOR_RETRY_DELAY_MS,
-                    ));
+                    std::thread::sleep(std::time::Duration::from_millis(COMPOSITOR_RETRY_DELAY_MS));
                 } else {
                     // A non-transient error (wgpu adapter missing, protocol
                     // mismatch, etc.): log clearly and fail fast.

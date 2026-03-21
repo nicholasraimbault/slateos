@@ -44,6 +44,8 @@ struct SettingsApp {
     network_state: network::NetworkState,
     /// About info.
     about_info: about::AboutInfo,
+    /// Brightness state (ephemeral, read from sysfs).
+    brightness: display::BrightnessState,
     /// Timestamp of last settings mutation (for debounced save).
     last_change: Option<Instant>,
     /// Which section was last changed (for D-Bus signal).
@@ -101,6 +103,7 @@ impl SettingsApp {
             fex_state: fex::FexState::default(),
             network_state: network::NetworkState::default(),
             about_info: about::AboutInfo::default(),
+            brightness: display::BrightnessState::default(),
             last_change: None,
             pending_section: None,
         };
@@ -114,7 +117,11 @@ impl SettingsApp {
             Message::Fex(fex::FexMsg::StatusChecked(state))
         });
 
-        (app, Task::batch([about_task, fex_task]))
+        let brightness_task = Task::perform(async { display::read_brightness().await }, |state| {
+            Message::Display(display::DisplayMsg::BrightnessLoaded(state))
+        });
+
+        (app, Task::batch([about_task, fex_task, brightness_task]))
     }
 
     fn title(&self) -> String {
@@ -157,13 +164,31 @@ impl SettingsApp {
                             Message::Fex(fex::FexMsg::StatusChecked(s))
                         });
                     }
+                    Page::Display => {
+                        return Task::perform(
+                            async { display::read_brightness().await },
+                            |state| Message::Display(display::DisplayMsg::BrightnessLoaded(state)),
+                        );
+                    }
                     _ => {}
                 }
             }
 
             Message::Display(msg) => {
-                display::update(&mut self.settings.display, msg);
-                self.mark_changed("display");
+                // Brightness messages do not require a settings save
+                let needs_save = matches!(
+                    msg,
+                    display::DisplayMsg::ScaleChanged(_)
+                        | display::DisplayMsg::RotationLockToggled(_)
+                );
+                if let Some(task) =
+                    display::update(&mut self.settings.display, &mut self.brightness, msg)
+                {
+                    return task.map(Message::Display);
+                }
+                if needs_save {
+                    self.mark_changed("display");
+                }
             }
 
             Message::Wallpaper(msg) => {
@@ -246,7 +271,9 @@ impl SettingsApp {
         let sidebar = navigation::view_sidebar(self.current_page, Message::ChangePage);
 
         let content: Element<'_, Message> = match self.current_page {
-            Page::Display => display::view(&self.settings.display).map(Message::Display),
+            Page::Display => {
+                display::view(&self.settings.display, &self.brightness).map(Message::Display)
+            }
             Page::Wallpaper => wallpaper::view(&self.settings.wallpaper, &self.wallpaper_images)
                 .map(Message::Wallpaper),
             Page::Dock => dock::view(&self.settings.dock).map(Message::Dock),

@@ -250,14 +250,11 @@ impl Launcher {
                 "No results"
             };
 
-            Column::new()
-                .spacing(gap)
-                .padding(20.0)
-                .push(
-                    container(text(empty_label).size(18))
-                        .width(Length::Fill)
-                        .center_x(Length::Fill),
-                )
+            Column::new().spacing(gap).padding(20.0).push(
+                container(text(empty_label).size(18))
+                    .width(Length::Fill)
+                    .center_x(Length::Fill),
+            )
         } else {
             filtered.chunks(columns).enumerate().fold(
                 Column::new().spacing(gap).padding(20.0),
@@ -271,13 +268,11 @@ impl Launcher {
                                 column![
                                     // Icon placeholder (a rounded square; real icon
                                     // lookup via the icon theme is future work).
-                                    container(
-                                        text(app.icon_placeholder()).size(icon_size * 0.5),
-                                    )
-                                    .width(Length::Fixed(icon_size))
-                                    .height(Length::Fixed(icon_size))
-                                    .center_x(Length::Fixed(icon_size))
-                                    .center_y(Length::Fixed(icon_size)),
+                                    container(text(app.icon_placeholder()).size(icon_size * 0.5),)
+                                        .width(Length::Fixed(icon_size))
+                                        .height(Length::Fixed(icon_size))
+                                        .center_x(Length::Fixed(icon_size))
+                                        .center_y(Length::Fixed(icon_size)),
                                     text(&app.name).size(12).center(),
                                 ]
                                 .spacing(4)

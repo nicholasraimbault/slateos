@@ -522,7 +522,7 @@ mod tests {
         // tablet form factor (landscape is wider, portrait is narrower but
         // still above the 600 lp phone boundary at this scale).
         let landscape = FormFactor::detect(2560, 1600, 2.0); // logical width 1280
-        let portrait = FormFactor::detect(1600, 2560, 2.0);  // logical width 800
+        let portrait = FormFactor::detect(1600, 2560, 2.0); // logical width 800
         assert_eq!(landscape, FormFactor::Tablet);
         assert_eq!(portrait, FormFactor::Tablet);
     }
@@ -532,8 +532,8 @@ mod tests {
         // Landscape and portrait produce different layouts (more columns when
         // the screen is wider) — this is intentional, not a bug.
         let landscape = compute_layout(2560, 1600, 2.0); // logical width 1280
-        let portrait = compute_layout(1600, 2560, 2.0);  // logical width 800
-        // Both are tablet form factor
+        let portrait = compute_layout(1600, 2560, 2.0); // logical width 800
+                                                        // Both are tablet form factor
         assert_eq!(landscape.form_factor, FormFactor::Tablet);
         assert_eq!(portrait.form_factor, FormFactor::Tablet);
         // Landscape gets more launcher columns because it has more horizontal space

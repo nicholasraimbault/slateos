@@ -147,7 +147,9 @@ fn run_layershell() -> Result<()> {
 
     impl TryInto<iced_layershell::actions::LayershellCustomActions> for Message {
         type Error = Self;
-        fn try_into(self) -> Result<iced_layershell::actions::LayershellCustomActions, Self::Error> {
+        fn try_into(
+            self,
+        ) -> Result<iced_layershell::actions::LayershellCustomActions, Self::Error> {
             Err(self)
         }
     }
