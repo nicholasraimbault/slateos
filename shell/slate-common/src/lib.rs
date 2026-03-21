@@ -4,6 +4,7 @@
 /// depends on it for palette types, D-Bus constants, settings schema, and
 /// iced theme generation.
 pub mod dbus;
+pub mod layout;
 pub mod palette;
 pub mod settings;
 pub mod theme;
