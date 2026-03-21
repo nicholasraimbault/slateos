@@ -30,10 +30,12 @@ const SEPARATOR_WIDTH: f32 = 1.0;
 
 /// An icon in the dock with its metadata and visual state.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // is_pinned is used by context_menu logic and tests
 pub struct DockIcon {
     pub entry: DesktopEntry,
     pub is_running: bool,
     pub is_focused: bool,
+    pub is_pinned: bool,
     pub scale: f64,
 }
 
@@ -54,6 +56,7 @@ pub fn build_dock_icons(
                 entry: entry.clone(),
                 is_running: running_match.is_some(),
                 is_focused: running_match.map(|r| r.is_focused).unwrap_or(false),
+                is_pinned: true,
                 scale: 1.0,
             }
         })
@@ -80,6 +83,7 @@ pub fn build_dock_icons(
                 entry,
                 is_running: true,
                 is_focused: r.is_focused,
+                is_pinned: false,
                 scale: 1.0,
             }
         })

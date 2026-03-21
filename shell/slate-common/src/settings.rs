@@ -97,6 +97,18 @@ pub struct DockSettings {
     pub auto_hide: bool,
     /// Icon size in logical pixels.
     pub icon_size: u32,
+    /// Desktop IDs of pinned dock apps, in display order.
+    #[serde(default = "default_pinned_apps")]
+    pub pinned_apps: Vec<String>,
+}
+
+/// Fallback pinned apps when the field is absent from an older settings file.
+fn default_pinned_apps() -> Vec<String> {
+    vec![
+        "Alacritty".to_string(),
+        "firefox".to_string(),
+        "org.gnome.Nautilus".to_string(),
+    ]
 }
 
 impl Default for DockSettings {
@@ -104,6 +116,7 @@ impl Default for DockSettings {
         Self {
             auto_hide: false,
             icon_size: 44,
+            pinned_apps: default_pinned_apps(),
         }
     }
 }

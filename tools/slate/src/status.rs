@@ -48,9 +48,7 @@ impl CrateStatus {
         } else {
             let bin = out_dir.join(name);
             debug!(path = %bin.display(), "checking binary");
-            bin.metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
+            bin.metadata().ok().and_then(|m| m.modified().ok())
         };
 
         CrateStatus {
@@ -93,7 +91,14 @@ fn print_device_section(device: &Device) {
     println!("  Target device");
     println!("    device  : {device}");
     println!("    triple  : {}", device.cargo_target());
-    println!("    cross   : {}", if device.needs_cross_compile() { "yes (not yet implemented)" } else { "no (native)" });
+    println!(
+        "    cross   : {}",
+        if device.needs_cross_compile() {
+            "yes (not yet implemented)"
+        } else {
+            "no (native)"
+        }
+    );
 }
 
 fn print_crate_section(repo_root: &Option<PathBuf>, device: &Device) {
@@ -154,7 +159,9 @@ fn find_repo_root() -> Option<PathBuf> {
 
 fn out_dir(root: &std::path::Path, device: &Device, profile: &str) -> PathBuf {
     if device.needs_cross_compile() {
-        root.join("target").join(device.cargo_target()).join(profile)
+        root.join("target")
+            .join(device.cargo_target())
+            .join(profile)
     } else {
         root.join("target").join(profile)
     }

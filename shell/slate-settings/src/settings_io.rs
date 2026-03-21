@@ -225,6 +225,7 @@ mod tests {
             dock: slate_common::settings::DockSettings {
                 auto_hide: true,
                 icon_size: 56,
+                ..Default::default()
             },
             ..Settings::default()
         };
