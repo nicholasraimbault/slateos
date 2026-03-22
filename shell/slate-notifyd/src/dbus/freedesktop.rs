@@ -155,7 +155,7 @@ impl FreedesktopNotifications {
                 && !new_suppress_sound
                 && self.sound_enabled
             {
-                play_notification_sound().await;
+                play_notification_sound();
             }
 
             // Return replaces_id per spec, not the newly assigned fd_id.
@@ -214,7 +214,7 @@ impl FreedesktopNotifications {
             && !suppress_sound
             && self.sound_enabled
         {
-            play_notification_sound().await;
+            play_notification_sound();
         }
 
         // Silence unused emitter warning — the freedesktop emitter is still needed
@@ -240,7 +240,7 @@ impl FreedesktopNotifications {
                     .iter()
                     .filter(|n| n.app_name == notif_app_name)
                     .count() as u32;
-                let _ = HistoryWriter::append(&dismissed, &self.history_dir).await;
+                let _ = HistoryWriter::append(&dismissed, &self.history_dir);
                 drop(store);
 
                 // Reason 3 = closed by a call to CloseNotification (per freedesktop spec).

@@ -82,7 +82,7 @@ async fn notifyd_starts_and_claims_bus_name() {
     let (name, _, _, _): (String, String, String, String) = reply.body().deserialize().unwrap();
     assert_eq!(name, "slate-notifyd");
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }
 
 #[tokio::test]
@@ -121,7 +121,7 @@ async fn send_and_retrieve_notification() {
         "should contain our summary"
     );
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }
 
 #[tokio::test]
@@ -175,7 +175,7 @@ async fn dismiss_removes_notification() {
         "dismissed notification should be removed"
     );
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }
 
 #[tokio::test]
@@ -203,7 +203,7 @@ async fn fd_id_increments_monotonically() {
     assert!(id2 > id1, "IDs should increase: {id2} > {id1}");
     assert!(id3 > id2, "IDs should increase: {id3} > {id2}");
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }
 
 #[tokio::test]
@@ -226,20 +226,20 @@ async fn dnd_property_round_trip() {
     let slate = slate_notif_proxy(&conn).await.unwrap();
 
     // Read initial DND state.
-    let dnd: bool = slate.get_property("dnd").await.unwrap();
+    let dnd: bool = slate.get_property("Dnd").await.unwrap();
     assert!(!dnd, "DND should default to false");
 
     // Enable DND.
-    slate.set_property("dnd", true).await.unwrap();
-    let dnd: bool = slate.get_property("dnd").await.unwrap();
+    slate.set_property("Dnd", true).await.unwrap();
+    let dnd: bool = slate.get_property("Dnd").await.unwrap();
     assert!(dnd, "DND should be true after setting");
 
     // Disable DND.
-    slate.set_property("dnd", false).await.unwrap();
-    let dnd: bool = slate.get_property("dnd").await.unwrap();
+    slate.set_property("Dnd", false).await.unwrap();
+    let dnd: bool = slate.get_property("Dnd").await.unwrap();
     assert!(!dnd, "DND should be false after unsetting");
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }
 
 #[tokio::test]
@@ -266,7 +266,7 @@ async fn get_capabilities_returns_expected_list() {
     assert!(caps.contains(&"body".to_string()), "should support body");
     assert!(caps.contains(&"actions".to_string()), "should support actions");
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }
 
 #[tokio::test]
@@ -302,5 +302,5 @@ async fn dismiss_all_clears_non_persistent() {
         "all non-persistent notifications should be dismissed"
     );
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }

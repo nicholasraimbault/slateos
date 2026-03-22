@@ -35,7 +35,7 @@ async fn rhea_starts_and_claims_bus_name() {
     .await
     .expect("rhea should start");
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown(&conn, RHEA_BUS_NAME).await.unwrap();
 }
 
 #[tokio::test]
@@ -62,7 +62,7 @@ async fn get_status_returns_json() {
     assert!(status.contains("backend"), "status should contain backend field: {status}");
     assert!(status.contains("ready"), "status should contain ready field: {status}");
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown(&conn, RHEA_BUS_NAME).await.unwrap();
 }
 
 #[tokio::test]
@@ -101,7 +101,7 @@ async fn complete_with_none_backend_returns_error_or_empty() {
         }
     }
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown(&conn, RHEA_BUS_NAME).await.unwrap();
 }
 
 #[tokio::test]
@@ -138,5 +138,5 @@ async fn classify_with_none_backend() {
         }
     }
 
-    daemon.shutdown().await.unwrap();
+    daemon.shutdown(&conn, RHEA_BUS_NAME).await.unwrap();
 }

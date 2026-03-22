@@ -7,20 +7,22 @@
 /// Path to the freedesktop notification sound installed by the sound-theme-freedesktop package.
 const NOTIFICATION_SOUND: &str = "/usr/share/sounds/freedesktop/stereo/message-new-instant.ogg";
 
-/// Play the default notification sound asynchronously.
+/// Play the default notification sound.
 ///
-/// Returns immediately after spawning `pw-play`. If the sound file does not
-/// exist or `pw-play` cannot be started, the error is logged and silently
+/// Spawns `pw-play` as a fire-and-forget subprocess. If the sound file does
+/// not exist or `pw-play` cannot be started, the error is logged and silently
 /// ignored — audio failures must never interrupt notification delivery.
-pub async fn play_notification_sound() {
-    if !tokio::fs::try_exists(NOTIFICATION_SOUND)
-        .await
-        .unwrap_or(false)
-    {
+///
+/// Uses `std::process::Command` (not tokio) because this may be called from
+/// a zbus handler thread that lacks a tokio runtime context.
+pub fn play_notification_sound() {
+    if !std::path::Path::new(NOTIFICATION_SOUND).exists() {
         return;
     }
-    match tokio::process::Command::new("pw-play")
+    match std::process::Command::new("pw-play")
         .arg(NOTIFICATION_SOUND)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
     {
         Ok(_) => {}
@@ -37,10 +39,10 @@ mod tests {
         assert!(NOTIFICATION_SOUND.starts_with('/'));
     }
 
-    #[tokio::test]
-    async fn play_sound_does_not_panic_when_file_missing() {
+    #[test]
+    fn play_sound_does_not_panic_when_file_missing() {
         // The sound file almost certainly does not exist in the test environment.
         // The function should return without panicking.
-        play_notification_sound().await;
+        play_notification_sound();
     }
 }

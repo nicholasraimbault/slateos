@@ -51,7 +51,6 @@ impl SlateNotifications {
             .single()
             .unwrap_or_else(Utc::now);
         let notifications = HistoryReader::read(&self.history_dir, since, limit as usize)
-            .await
             .unwrap_or_default();
 
         #[derive(serde::Serialize)]
@@ -93,7 +92,7 @@ impl SlateNotifications {
         let mut store = self.store.write().await;
         if let Some(dismissed) = store.dismiss(uuid) {
             let fd_id = dismissed.fd_id;
-            let _ = HistoryWriter::append(&dismissed, &self.history_dir).await;
+            let _ = HistoryWriter::append(&dismissed, &self.history_dir);
             drop(store);
 
             // Emit Dismissed on the Slate interface (same interface, direct call).
@@ -129,7 +128,7 @@ impl SlateNotifications {
         }
 
         for n in &dismissed {
-            let _ = HistoryWriter::append(n, &self.history_dir).await;
+            let _ = HistoryWriter::append(n, &self.history_dir);
         }
         drop(store);
 
@@ -166,7 +165,7 @@ impl SlateNotifications {
             .filter(|n| n.app_name == app_name)
             .count() as u32;
         for n in &dismissed {
-            let _ = HistoryWriter::append(n, &self.history_dir).await;
+            let _ = HistoryWriter::append(n, &self.history_dir);
         }
         drop(store);
 

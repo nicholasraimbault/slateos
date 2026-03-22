@@ -92,11 +92,16 @@ impl DaemonProcess {
         })
     }
 
-    /// Send SIGTERM and wait for graceful shutdown.
-    pub async fn shutdown(mut self) -> anyhow::Result<()> {
+    /// Send SIGTERM, wait for exit, then wait for bus name(s) release.
+    pub async fn shutdown(mut self, conn: &Connection, bus_name: &str) -> anyhow::Result<()> {
+        self.shutdown_multi(conn, &[bus_name]).await
+    }
+
+    /// Shutdown and wait for multiple bus names to be released.
+    pub async fn shutdown_multi(mut self, conn: &Connection, bus_names: &[&str]) -> anyhow::Result<()> {
         tracing::info!("shutting down {}", self.name);
 
-        // Send SIGTERM via nix crate or kill command.
+        // Send SIGTERM.
         if let Some(pid) = self.child.id() {
             let _ = Command::new("kill")
                 .arg("-TERM")
@@ -109,18 +114,21 @@ impl DaemonProcess {
         match tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await {
             Ok(Ok(status)) => {
                 tracing::info!("{} exited with {status}", self.name);
-                Ok(())
             }
             Ok(Err(e)) => {
                 tracing::warn!("{} wait error: {e}", self.name);
-                Ok(())
             }
             Err(_) => {
                 tracing::warn!("{} did not exit in 3s, killing", self.name);
                 let _ = self.child.kill().await;
-                Ok(())
             }
         }
+
+        // Wait for all bus names to be released so the next test can claim them.
+        for name in bus_names {
+            wait_for_bus_name_released(conn, name).await?;
+        }
+        Ok(())
     }
 }
 
@@ -135,16 +143,53 @@ impl Drop for DaemonProcess {
 /// Wait until a bus name is owned on the session bus.
 async fn wait_for_bus_name(conn: &Connection, bus_name: &str) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + BUS_NAME_TIMEOUT;
+    let dbus_proxy = zbus::Proxy::new(
+        conn,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )
+    .await?;
 
     loop {
-        // Use the standard D-Bus method to check name ownership.
-        let proxy = zbus::fdo::DBusProxy::new(conn).await?;
-        if proxy.name_has_owner(bus_name.try_into()?).await? {
+        let reply = dbus_proxy
+            .call_method("NameHasOwner", &(bus_name,))
+            .await?;
+        let owned: bool = reply.body().deserialize()?;
+        if owned {
             return Ok(());
         }
 
         if tokio::time::Instant::now() >= deadline {
             return Err(anyhow::anyhow!("timeout waiting for bus name '{bus_name}'"));
+        }
+
+        tokio::time::sleep(BUS_NAME_POLL_INTERVAL).await;
+    }
+}
+
+/// Wait until a bus name is no longer owned (released after daemon shutdown).
+async fn wait_for_bus_name_released(conn: &Connection, bus_name: &str) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + BUS_NAME_TIMEOUT;
+    let dbus_proxy = zbus::Proxy::new(
+        conn,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+    )
+    .await?;
+
+    loop {
+        let reply = dbus_proxy
+            .call_method("NameHasOwner", &(bus_name,))
+            .await?;
+        let owned: bool = reply.body().deserialize()?;
+        if !owned {
+            return Ok(());
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(anyhow::anyhow!("timeout waiting for bus name '{bus_name}' to be released"));
         }
 
         tokio::time::sleep(BUS_NAME_POLL_INTERVAL).await;
