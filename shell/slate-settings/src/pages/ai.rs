@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use iced::widget::{column, container, text, text_input, toggler};
 use iced::{Element, Length};
 
-use slate_common::settings::AiSettings;
+use slate_common::settings::RheaSettings;
 
 // ---------------------------------------------------------------------------
 // LLM flag file
@@ -64,13 +64,18 @@ pub enum AiMsg {
 // ---------------------------------------------------------------------------
 
 pub fn update(
-    settings: &mut AiSettings,
+    settings: &mut RheaSettings,
     models: &mut Vec<PathBuf>,
     msg: AiMsg,
 ) -> Option<iced::Task<AiMsg>> {
     match msg {
         AiMsg::EnabledToggled(v) => {
-            settings.enabled = v;
+            // Map the toggle to backend selection: "local" when enabled, "none" when disabled.
+            settings.backend = if v {
+                "local".to_string()
+            } else {
+                "none".to_string()
+            };
             // Create or remove the flag file
             let flag = llm_flag_path();
             if v {
@@ -90,15 +95,21 @@ pub fn update(
             Some(task)
         }
         AiMsg::ModelSelected(path) => {
-            settings.model_path = Some(path.to_string_lossy().to_string());
+            // Store the filename (without path) as the local model name.
+            let name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            settings.local.model = name;
             None
         }
         AiMsg::EndpointChanged(url) => {
-            settings.endpoint = if url.is_empty() { None } else { Some(url) };
+            settings.openai.base_url = url;
             None
         }
         AiMsg::ApiKeyChanged(key) => {
-            settings.api_key = if key.is_empty() { None } else { Some(key) };
+            settings.openai.api_key_file = key;
             None
         }
         AiMsg::ModelsScanned(found) => {
@@ -119,13 +130,14 @@ pub fn update(
 // View
 // ---------------------------------------------------------------------------
 
-pub fn view<'a>(settings: &'a AiSettings, models: &'a [PathBuf]) -> Element<'a, AiMsg> {
+pub fn view<'a>(settings: &'a RheaSettings, models: &'a [PathBuf]) -> Element<'a, AiMsg> {
     let mut items: Vec<Element<'a, AiMsg>> = Vec::new();
 
     items.push(text("AI & LLM").size(24).into());
 
+    let is_enabled = settings.backend != "none";
     items.push(
-        toggler(settings.enabled)
+        toggler(is_enabled)
             .label("Enable local LLM")
             .on_toggle(AiMsg::EnabledToggled)
             .into(),
@@ -146,11 +158,12 @@ pub fn view<'a>(settings: &'a AiSettings, models: &'a [PathBuf]) -> Element<'a, 
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let is_active = settings
-                .model_path
-                .as_deref()
-                .map(|p| p == model.to_string_lossy().as_ref())
-                .unwrap_or(false);
+            let stem = model
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let is_active = settings.local.model == stem;
             let label = if is_active {
                 format!("[*] {name}")
             } else {
@@ -169,19 +182,16 @@ pub fn view<'a>(settings: &'a AiSettings, models: &'a [PathBuf]) -> Element<'a, 
     // Endpoint URL
     items.push(text("Endpoint URL:").size(16).into());
     items.push(
-        text_input(
-            "https://api.example.com/v1",
-            settings.endpoint.as_deref().unwrap_or(""),
-        )
-        .on_input(AiMsg::EndpointChanged)
-        .padding(8)
-        .into(),
+        text_input("https://api.example.com/v1", &settings.openai.base_url)
+            .on_input(AiMsg::EndpointChanged)
+            .padding(8)
+            .into(),
     );
 
-    // API key (secure field)
-    items.push(text("API Key:").size(16).into());
+    // API key file (secure field)
+    items.push(text("API Key File:").size(16).into());
     items.push(
-        text_input("sk-...", settings.api_key.as_deref().unwrap_or(""))
+        text_input("path/to/key-file", &settings.openai.api_key_file)
             .on_input(AiMsg::ApiKeyChanged)
             .secure(true)
             .padding(8)
@@ -208,30 +218,30 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_empty_becomes_none() {
-        let mut s = AiSettings::default();
+    fn endpoint_empty_clears_url() {
+        let mut s = RheaSettings::default();
         let mut models = Vec::new();
         update(&mut s, &mut models, AiMsg::EndpointChanged(String::new()));
-        assert!(s.endpoint.is_none());
+        assert!(s.openai.base_url.is_empty());
     }
 
     #[test]
-    fn endpoint_non_empty_becomes_some() {
-        let mut s = AiSettings::default();
+    fn endpoint_non_empty_sets_url() {
+        let mut s = RheaSettings::default();
         let mut models = Vec::new();
         update(
             &mut s,
             &mut models,
             AiMsg::EndpointChanged("https://example.com".to_string()),
         );
-        assert_eq!(s.endpoint.as_deref(), Some("https://example.com"));
+        assert_eq!(s.openai.base_url, "https://example.com");
     }
 
     #[test]
-    fn api_key_empty_becomes_none() {
-        let mut s = AiSettings::default();
+    fn api_key_empty_clears_file() {
+        let mut s = RheaSettings::default();
         let mut models = Vec::new();
         update(&mut s, &mut models, AiMsg::ApiKeyChanged(String::new()));
-        assert!(s.api_key.is_none());
+        assert!(s.openai.api_key_file.is_empty());
     }
 }

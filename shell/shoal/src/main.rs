@@ -312,9 +312,7 @@ impl Shoal {
 
         // Toast expiry tick: only run while toasts are visible
         if !self.toast_state.is_empty() {
-            subs.push(
-                iced::time::every(Duration::from_millis(250)).map(|_| Message::ToastTick),
-            );
+            subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::ToastTick));
         }
 
         Subscription::batch(subs)

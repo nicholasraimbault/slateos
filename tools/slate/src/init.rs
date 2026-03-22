@@ -53,7 +53,10 @@ pub fn run(args: InitArgs) -> Result<()> {
     if niri_config.exists() {
         println!(
             "  [2/3] Niri config ready: {}",
-            niri_config.strip_prefix(&repo_root).unwrap_or(&niri_config).display()
+            niri_config
+                .strip_prefix(&repo_root)
+                .unwrap_or(&niri_config)
+                .display()
         );
     } else {
         println!(
@@ -72,7 +75,10 @@ pub fn run(args: InitArgs) -> Result<()> {
     if waybar_config.exists() {
         println!(
             "  [3/3] Waybar config ready: {}",
-            waybar_config.strip_prefix(&repo_root).unwrap_or(&waybar_config).display()
+            waybar_config
+                .strip_prefix(&repo_root)
+                .unwrap_or(&waybar_config)
+                .display()
         );
     } else {
         println!(
@@ -109,10 +115,7 @@ fn print_nested_niri_hint(repo_root: &Path, device: &Device) {
 
         if config_path.exists() {
             println!("  To run niri nested (inside an existing Wayland session):");
-            println!(
-                "    niri --config {}",
-                config_path.display()
-            );
+            println!("    niri --config {}", config_path.display());
             println!();
         }
     }

@@ -95,9 +95,7 @@ fn resolve_icon_in(
     // Search hicolor theme at each candidate size.
     let theme_dir = Path::new(icon_theme_dir).join(HICOLOR_THEME);
     for &sz in &sizes {
-        let dir = theme_dir
-            .join(format!("{sz}x{sz}"))
-            .join("apps");
+        let dir = theme_dir.join(format!("{sz}x{sz}")).join("apps");
         for ext in EXTENSIONS {
             let candidate = dir.join(format!("{name}.{ext}"));
             if candidate.is_file() {
@@ -179,12 +177,7 @@ impl IconCache {
     }
 
     /// Testable inner implementation that accepts custom base directories.
-    fn resolve_in(
-        &self,
-        name: &str,
-        icon_theme_dir: &str,
-        pixmaps_dir: &str,
-    ) -> Option<PathBuf> {
+    fn resolve_in(&self, name: &str, icon_theme_dir: &str, pixmaps_dir: &str) -> Option<PathBuf> {
         if name.is_empty() {
             return None;
         }
@@ -236,9 +229,7 @@ mod tests {
 
     /// Helper: create a temporary icon theme tree and return the base
     /// icon theme dir and pixmaps dir paths.
-    fn setup_icon_dirs(
-        base: &Path,
-    ) -> (PathBuf, PathBuf) {
+    fn setup_icon_dirs(base: &Path) -> (PathBuf, PathBuf) {
         let icons_dir = base.join("icons");
         let pixmaps_dir = base.join("pixmaps");
 
@@ -552,6 +543,9 @@ mod tests {
     fn icon_error_display_empty_name() {
         let err = IconError::EmptyName;
         let msg = format!("{err}");
-        assert!(msg.contains("empty"), "error message should mention 'empty'");
+        assert!(
+            msg.contains("empty"),
+            "error message should mention 'empty'"
+        );
     }
 }

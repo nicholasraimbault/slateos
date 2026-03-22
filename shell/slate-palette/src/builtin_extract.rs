@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn palette_from_hue_produces_valid_palette() {
         let palette = palette_from_hue(210.0); // blue-ish
-        // All alpha channels should be 255.
+                                               // All alpha channels should be 255.
         for colour in [
             palette.primary,
             palette.secondary,

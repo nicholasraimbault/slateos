@@ -64,7 +64,8 @@ impl std::fmt::Display for ServiceSource {
 
 /// Execute `slate services`.
 pub fn run(args: ServicesArgs) -> Result<()> {
-    let repo_root = crate::workspace::find_repo_root().context("could not find slateos repo root")?;
+    let repo_root =
+        crate::workspace::find_repo_root().context("could not find slateos repo root")?;
     let services = discover_services(&repo_root, &args.device)?;
 
     if let Some(name) = &args.inspect {
@@ -275,8 +276,6 @@ fn read_env_dir(dir: &Path) -> BTreeMap<String, String> {
     env
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -334,10 +333,7 @@ mod tests {
     }
 
     fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "slate-test-{}-{name}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("slate-test-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::create_dir_all(&dir);
         dir

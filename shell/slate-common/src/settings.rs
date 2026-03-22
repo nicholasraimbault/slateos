@@ -34,7 +34,8 @@ pub struct Settings {
     pub dock: DockSettings,
     pub gestures: GestureSettings,
     pub keyboard: KeyboardSettings,
-    pub ai: AiSettings,
+    pub rhea: RheaSettings,
+    pub notifications: NotificationSettings,
 }
 
 impl Settings {
@@ -158,25 +159,127 @@ impl Default for KeyboardSettings {
     }
 }
 
+/// Top-level Rhea AI engine settings (replaces old AiSettings).
+///
+/// Supports multiple backends: local llama.cpp, Claude API, OpenAI-compatible,
+/// and Ollama. The `backend` field selects which one is active.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AiSettings {
-    /// Enable OpenClaw AI integration.
-    pub enabled: bool,
-    /// Path to a local model (if running on-device inference).
-    pub model_path: Option<String>,
-    /// Remote API endpoint URL.
-    pub endpoint: Option<String>,
-    /// API key for the remote endpoint.
-    pub api_key: Option<String>,
+pub struct RheaSettings {
+    /// Which backend to use: "local", "claude", "openai", "ollama".
+    pub backend: String,
+    /// Whether Rhea proactively offers suggestions.
+    pub proactive: bool,
+    /// Local llama.cpp backend settings.
+    pub local: RheaLocalSettings,
+    /// Anthropic Claude API settings.
+    pub claude: RheaClaudeSettings,
+    /// OpenAI-compatible API settings.
+    pub openai: RheaOpenAiSettings,
+    /// Ollama API settings.
+    pub ollama: RheaOllamaSettings,
 }
 
-impl Default for AiSettings {
+impl Default for RheaSettings {
     fn default() -> Self {
         Self {
-            enabled: true,
-            model_path: None,
-            endpoint: None,
-            api_key: None,
+            backend: "local".to_string(),
+            proactive: false,
+            local: RheaLocalSettings::default(),
+            claude: RheaClaudeSettings::default(),
+            openai: RheaOpenAiSettings::default(),
+            ollama: RheaOllamaSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RheaLocalSettings {
+    /// GGUF model filename (resolved from models dir).
+    pub model: String,
+    /// Seconds of idle before unloading the model from RAM.
+    pub idle_timeout_secs: u32,
+    /// Whisper model size for speech-to-text.
+    pub whisper_model: String,
+}
+
+impl Default for RheaLocalSettings {
+    fn default() -> Self {
+        Self {
+            model: "gemma-2-2b-Q4_K_M".to_string(),
+            idle_timeout_secs: 30,
+            whisper_model: "base".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RheaClaudeSettings {
+    /// Path to a file containing the API key (not the key itself).
+    pub api_key_file: String,
+    /// Claude model to use.
+    pub model: String,
+}
+
+impl Default for RheaClaudeSettings {
+    fn default() -> Self {
+        Self {
+            api_key_file: String::new(),
+            model: "claude-sonnet-4-6".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RheaOpenAiSettings {
+    /// Path to a file containing the API key.
+    pub api_key_file: String,
+    /// Base URL of the OpenAI-compatible API.
+    pub base_url: String,
+    /// Model name.
+    pub model: String,
+}
+
+impl Default for RheaOpenAiSettings {
+    fn default() -> Self {
+        Self {
+            api_key_file: String::new(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o-mini".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RheaOllamaSettings {
+    /// Base URL of the Ollama API.
+    pub base_url: String,
+    /// Model name.
+    pub model: String,
+}
+
+impl Default for RheaOllamaSettings {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama3.2:3b".to_string(),
+        }
+    }
+}
+
+/// Notification display preferences.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NotificationSettings {
+    /// Do-not-disturb mode suppresses heads-up banners.
+    pub dnd: bool,
+    /// How long heads-up notifications remain visible.
+    pub heads_up_duration_secs: u32,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            dnd: false,
+            heads_up_duration_secs: 5,
         }
     }
 }
@@ -206,7 +309,8 @@ mod tests {
         assert!(toml_str.contains("[dock]"));
         assert!(toml_str.contains("[gestures]"));
         assert!(toml_str.contains("[keyboard]"));
-        assert!(toml_str.contains("[ai]"));
+        assert!(toml_str.contains("[rhea]"));
+        assert!(toml_str.contains("[notifications]"));
     }
 
     #[test]

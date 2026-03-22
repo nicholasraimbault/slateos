@@ -102,7 +102,8 @@ pub const SHELL_CRATES: &[&str] = &[
 
 /// Execute `slate build`.
 pub fn run(args: BuildArgs) -> Result<()> {
-    let repo_root = crate::workspace::find_repo_root().context("could not find slateos repo root")?;
+    let repo_root =
+        crate::workspace::find_repo_root().context("could not find slateos repo root")?;
 
     info!(
         device = %args.device,
