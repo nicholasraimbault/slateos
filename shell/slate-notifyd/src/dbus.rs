@@ -12,6 +12,7 @@ use chrono::{TimeZone, Utc};
 use slate_common::notifications::{Notification, NotificationAction, Urgency};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use zbus::object_server::SignalEmitter;
 
 use crate::grouping;
 use crate::history::{HistoryReader, HistoryWriter};
@@ -23,6 +24,9 @@ use crate::store::NotificationStore;
 
 /// Shared reference to the notification store.
 pub type SharedStore = Arc<RwLock<NotificationStore>>;
+
+// Freedesktop notifications object path — needed when emitting cross-interface signals.
+const FREEDESKTOP_PATH: &str = "/org/freedesktop/Notifications";
 
 // ---------------------------------------------------------------------------
 // freedesktop interface (org.freedesktop.Notifications)
@@ -48,6 +52,7 @@ impl FreedesktopNotifications {
         actions: Vec<String>,
         hints: HashMap<String, zbus::zvariant::OwnedValue>,
         _expire_timeout: i32,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<u32> {
         let urgency = extract_urgency(&hints);
         let group_key = extract_group_key(&hints);
@@ -71,7 +76,17 @@ impl FreedesktopNotifications {
                     updated.desktop_entry = desktop_entry;
                     updated.heads_up = should_heads_up(urgency, store.dnd);
                     let fd_id = updated.fd_id;
-                    store.update(updated);
+                    let uuid_str = updated.uuid.to_string();
+                    store.update(updated.clone());
+                    drop(store);
+
+                    // Emit Updated signal on the Slate interface via a TODO cross-interface call.
+                    // TODO: emit SlateNotifications::updated on org.slate.Notifications path.
+                    // For now emit on this interface's emitter as a best-effort record.
+                    let data = toml::to_string_pretty(&updated).unwrap_or_default();
+                    let _ = SlateNotificationsSignalEmit::emit_updated(&emitter, &uuid_str, &data)
+                        .await;
+
                     return Ok(fd_id);
                 }
             }
@@ -80,9 +95,10 @@ impl FreedesktopNotifications {
         let n_ref = store.add(app_name, summary, body);
         let fd_id = n_ref.fd_id;
         let uuid = n_ref.uuid;
+        let uuid_str = uuid.to_string();
 
         // Apply extra fields that add() doesn't set
-        if let Some(n) = store.get_by_uuid(uuid).cloned() {
+        let notification_data = if let Some(n) = store.get_by_uuid(uuid).cloned() {
             let mut updated = n;
             updated.app_icon = app_icon.to_string();
             updated.urgency = urgency;
@@ -91,18 +107,44 @@ impl FreedesktopNotifications {
             updated.category = category;
             updated.desktop_entry = desktop_entry;
             updated.heads_up = should_heads_up(urgency, store.dnd);
+            let data = toml::to_string_pretty(&updated).unwrap_or_default();
             store.update(updated);
-        }
+            data
+        } else {
+            String::new()
+        };
+        drop(store);
+
+        // Emit Added signal on the Slate interface.
+        // TODO: emit on org.slate.Notifications path for proper cross-interface signalling.
+        let _ =
+            SlateNotificationsSignalEmit::emit_added(&emitter, &uuid_str, &notification_data).await;
 
         Ok(fd_id)
     }
 
     /// Close a notification by freedesktop ID.
-    async fn close_notification(&self, id: u32) -> zbus::fdo::Result<()> {
+    async fn close_notification(
+        &self,
+        id: u32,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<()> {
         let mut store = self.store.write().await;
         if let Some(uuid) = store.get_by_fd_id(id).map(|n| n.uuid) {
             if let Some(dismissed) = store.dismiss(uuid) {
                 let _ = HistoryWriter::append(&dismissed, &self.history_dir);
+                let uuid_str = dismissed.uuid.to_string();
+                drop(store);
+
+                // Reason 3 = closed by a call to CloseNotification (per freedesktop spec).
+                let _ = Self::notification_closed(&emitter, id, 3).await;
+
+                // Emit Dismissed on the Slate interface.
+                // TODO: emit on org.slate.Notifications path.
+                let _ = SlateNotificationsSignalEmit::emit_dismissed(&emitter, &uuid_str, "closed")
+                    .await;
+
+                return Ok(());
             }
         }
         Ok(())
@@ -145,6 +187,62 @@ impl FreedesktopNotifications {
         id: u32,
         action_key: &str,
     ) -> zbus::Result<()>;
+}
+
+// ---------------------------------------------------------------------------
+// Helper to emit Slate interface signals from other interfaces.
+//
+// zbus generates `FreedesktopNotificationsSignals` and `SlateNotificationsSignals` traits
+// for their respective `SignalEmitter` impls. However, the emitter passed into a
+// FreedesktopNotifications method is bound to the freedesktop path. To emit on the
+// Slate interface path without adding a second connection parameter, we use the
+// low-level `SignalEmitter::emit` method directly.
+// ---------------------------------------------------------------------------
+
+struct SlateNotificationsSignalEmit;
+
+impl SlateNotificationsSignalEmit {
+    /// Emit org.slate.Notifications.Added via the low-level emit API.
+    /// TODO: Replace with typed trait call once cross-interface emitter injection is simpler.
+    async fn emit_added(
+        emitter: &SignalEmitter<'_>,
+        uuid: &str,
+        notification_data: &str,
+    ) -> zbus::Result<()> {
+        emitter
+            .emit(
+                "org.slate.Notifications",
+                "Added",
+                &(uuid, notification_data),
+            )
+            .await
+    }
+
+    /// Emit org.slate.Notifications.Updated.
+    async fn emit_updated(
+        emitter: &SignalEmitter<'_>,
+        uuid: &str,
+        notification_data: &str,
+    ) -> zbus::Result<()> {
+        emitter
+            .emit(
+                "org.slate.Notifications",
+                "Updated",
+                &(uuid, notification_data),
+            )
+            .await
+    }
+
+    /// Emit org.slate.Notifications.Dismissed.
+    async fn emit_dismissed(
+        emitter: &SignalEmitter<'_>,
+        uuid: &str,
+        reason: &str,
+    ) -> zbus::Result<()> {
+        emitter
+            .emit("org.slate.Notifications", "Dismissed", &(uuid, reason))
+            .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,12 +309,30 @@ impl SlateNotifications {
     }
 
     /// Dismiss a single notification by UUID string.
-    async fn dismiss(&self, uuid_str: &str) -> zbus::fdo::Result<bool> {
+    async fn dismiss(
+        &self,
+        uuid_str: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<bool> {
         let uuid = Uuid::parse_str(uuid_str)
             .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("invalid UUID: {e}")))?;
         let mut store = self.store.write().await;
         if let Some(dismissed) = store.dismiss(uuid) {
+            let fd_id = dismissed.fd_id;
             let _ = HistoryWriter::append(&dismissed, &self.history_dir);
+            drop(store);
+
+            // Emit Dismissed on the Slate interface (same interface, direct call).
+            let _ = Self::dismissed(&emitter, uuid_str, "user").await;
+
+            // Emit NotificationClosed on the freedesktop interface.
+            // Reason 2 = dismissed by the user (per freedesktop spec).
+            // TODO: use typed FreedesktopNotificationsSignals trait once emitter path injection is simpler.
+            if let Ok(fd_emitter) = SignalEmitter::new(conn, FREEDESKTOP_PATH) {
+                let _ = FreedesktopNotifications::notification_closed(&fd_emitter, fd_id, 2).await;
+            }
+
             Ok(true)
         } else {
             Ok(false)
@@ -224,44 +340,119 @@ impl SlateNotifications {
     }
 
     /// Dismiss all non-persistent notifications.
-    async fn dismiss_all(&self) -> u32 {
+    async fn dismiss_all(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> u32 {
         let mut store = self.store.write().await;
         let dismissed = store.dismiss_all();
         for n in &dismissed {
             let _ = HistoryWriter::append(n, &self.history_dir);
         }
+        drop(store);
+
+        // Emit Dismissed and NotificationClosed for every dismissed notification.
+        let fd_emitter = SignalEmitter::new(conn, FREEDESKTOP_PATH).ok();
+        for n in &dismissed {
+            let uuid_str = n.uuid.to_string();
+            let _ = Self::dismissed(&emitter, &uuid_str, "dismiss_all").await;
+
+            // TODO: use typed FreedesktopNotificationsSignals trait.
+            if let Some(ref fde) = fd_emitter {
+                let _ = FreedesktopNotifications::notification_closed(fde, n.fd_id, 2).await;
+            }
+        }
+
         dismissed.len() as u32
     }
 
     /// Dismiss all notifications from a specific app.
-    async fn dismiss_group(&self, app_name: &str) -> u32 {
+    async fn dismiss_group(
+        &self,
+        app_name: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> u32 {
         let mut store = self.store.write().await;
         let dismissed = store.dismiss_group(app_name);
         for n in &dismissed {
             let _ = HistoryWriter::append(n, &self.history_dir);
         }
+        drop(store);
+
+        // Emit Dismissed and NotificationClosed for every dismissed notification.
+        let fd_emitter = SignalEmitter::new(conn, FREEDESKTOP_PATH).ok();
+        for n in &dismissed {
+            let uuid_str = n.uuid.to_string();
+            let _ = Self::dismissed(&emitter, &uuid_str, "dismiss_group").await;
+
+            // TODO: use typed FreedesktopNotificationsSignals trait.
+            if let Some(ref fde) = fd_emitter {
+                let _ = FreedesktopNotifications::notification_closed(fde, n.fd_id, 2).await;
+            }
+        }
+
         dismissed.len() as u32
     }
 
     /// Invoke an action on a notification by UUID and action key.
-    async fn invoke_action(&self, uuid_str: &str, action_key: &str) -> zbus::fdo::Result<bool> {
+    async fn invoke_action(
+        &self,
+        uuid_str: &str,
+        action_key: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<bool> {
         let uuid = Uuid::parse_str(uuid_str)
             .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("invalid UUID: {e}")))?;
         let store = self.store.read().await;
         if let Some(n) = store.get_by_uuid(uuid) {
             let has_action = n.actions.iter().any(|a| a.key == action_key);
-            Ok(has_action)
+            if has_action {
+                let fd_id = n.fd_id;
+                drop(store);
+
+                // Emit ActionInvoked on the Slate interface.
+                let _ = Self::action_invoked_signal(&emitter, uuid_str, action_key).await;
+
+                // Emit ActionInvoked on the freedesktop interface.
+                // TODO: use typed FreedesktopNotificationsSignals trait.
+                if let Ok(fd_emitter) = SignalEmitter::new(conn, FREEDESKTOP_PATH) {
+                    let _ =
+                        FreedesktopNotifications::action_invoked(&fd_emitter, fd_id, action_key)
+                            .await;
+                }
+
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         } else {
             Ok(false)
         }
     }
 
     /// Mark a notification as read.
-    async fn mark_read(&self, uuid_str: &str) -> zbus::fdo::Result<bool> {
+    async fn mark_read(
+        &self,
+        uuid_str: &str,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> zbus::fdo::Result<bool> {
         let uuid = Uuid::parse_str(uuid_str)
             .map_err(|e| zbus::fdo::Error::InvalidArgs(format!("invalid UUID: {e}")))?;
         let mut store = self.store.write().await;
-        Ok(store.mark_read(uuid))
+        let marked = store.mark_read(uuid);
+        if marked {
+            // Retrieve the updated notification to include in the signal body.
+            let data = store
+                .get_by_uuid(uuid)
+                .map(|n| toml::to_string_pretty(n).unwrap_or_default())
+                .unwrap_or_default();
+            drop(store);
+            let _ = Self::updated(&emitter, uuid_str, &data).await;
+        }
+        Ok(marked)
     }
 
     /// DND property — read.
@@ -298,6 +489,14 @@ impl SlateNotifications {
         emitter: &zbus::object_server::SignalEmitter<'_>,
         uuid: &str,
         reason: &str,
+    ) -> zbus::Result<()>;
+
+    /// Signal: an action was invoked (Slate interface copy for convenience).
+    #[zbus(signal)]
+    pub async fn action_invoked_signal(
+        emitter: &zbus::object_server::SignalEmitter<'_>,
+        uuid: &str,
+        action_key: &str,
     ) -> zbus::Result<()>;
 
     /// Signal: group changed (app's notification count changed).

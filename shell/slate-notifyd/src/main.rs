@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use tokio::signal::unix::SignalKind;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -125,10 +126,20 @@ async fn main() -> Result<()> {
         persistence_loop(persist_store, persist_path).await;
     });
 
-    // Wait for shutdown signal
-    match tokio::signal::ctrl_c().await {
-        Ok(()) => info!("received shutdown signal"),
-        Err(e) => warn!("failed to listen for shutdown: {e}"),
+    // Wait for shutdown signal — handle both SIGINT (ctrl-c) and SIGTERM (arkhe stop).
+    // arkhe sends SIGTERM when stopping a service, so both must trigger graceful shutdown.
+    let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+        .context("failed to install SIGTERM handler")?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            match result {
+                Ok(()) => info!("received SIGINT, shutting down"),
+                Err(e) => warn!("failed to listen for SIGINT: {e}"),
+            }
+        }
+        _ = sigterm.recv() => {
+            info!("received SIGTERM, shutting down");
+        }
     }
 
     // Final flush

@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/bin/slate-notifyd
+exec /usr/lib/slate/slate-notifyd
