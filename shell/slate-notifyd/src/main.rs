@@ -3,7 +3,7 @@
 /// Implements the freedesktop notification D-Bus spec and a custom Slate OS
 /// extension interface. Notifications are persisted to disk and history is
 /// stored in daily TOML files.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -32,21 +32,62 @@ fn active_path() -> Result<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
+// Async persistence helpers
+// ---------------------------------------------------------------------------
+
+/// Write serialized store content to disk asynchronously.
+///
+/// Creates parent directories if needed. Runs in a `spawn_blocking` task so
+/// directory creation (which has no async API in tokio) does not block the executor.
+async fn write_active(path: &Path, content: String) {
+    let path = path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content)?;
+        Ok(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!("failed to write active notifications: {e}"),
+        Err(e) => warn!("spawn_blocking panicked writing active notifications: {e}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Debounced persistence
 // ---------------------------------------------------------------------------
 
 /// Periodically flush dirty store state to disk (at most once per second).
+///
+/// Snapshots the serialized content while holding the write lock, then drops
+/// the lock before performing I/O so the store is not blocked during writes.
 async fn persistence_loop(store: SharedStore, path: PathBuf) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
     loop {
         interval.tick().await;
-        let mut s = store.write().await;
-        if s.dirty {
-            if let Err(e) = s.save_active(&path) {
-                warn!("failed to persist active notifications: {e}");
-            } else {
-                s.dirty = false;
+        let snapshot = {
+            let mut s = store.write().await;
+            if !s.dirty {
+                continue;
             }
+            match s.serialize_active() {
+                Ok(content) => {
+                    s.dirty = false;
+                    Some(content)
+                }
+                Err(e) => {
+                    warn!("failed to serialize active notifications: {e}");
+                    None
+                }
+            }
+        };
+
+        if let Some(content) = snapshot {
+            write_active(&path, content).await;
         }
     }
 }
@@ -65,15 +106,21 @@ async fn main() -> Result<()> {
     let history_dir =
         HistoryReader::default_base_dir().context("failed to determine history directory")?;
 
-    // Load persisted state or start fresh
+    // Load persisted state or start fresh using async I/O.
     let store = if active_file.exists() {
-        match NotificationStore::load_active(&active_file) {
-            Ok(s) => {
-                info!("loaded {} active notifications", s.get_active().len());
-                s
-            }
+        match tokio::fs::read_to_string(&active_file).await {
+            Ok(content) => match NotificationStore::deserialize_active(&content) {
+                Ok(s) => {
+                    info!("loaded {} active notifications", s.get_active().len());
+                    s
+                }
+                Err(e) => {
+                    warn!("failed to parse active notifications, starting fresh: {e}");
+                    NotificationStore::new()
+                }
+            },
             Err(e) => {
-                warn!("failed to load active notifications, starting fresh: {e}");
+                warn!("failed to read active notifications file, starting fresh: {e}");
                 NotificationStore::new()
             }
         }
@@ -89,20 +136,24 @@ async fn main() -> Result<()> {
         .await
         .context("failed to connect to session D-Bus")?;
 
-    // Register freedesktop interface at the standard path
+    // Register freedesktop interface at the standard path.
+    // The connection is stored so cross-interface signals reach the correct path.
     let fd_iface = FreedesktopNotifications {
         store: shared_store.clone(),
         history_dir: history_dir.clone(),
+        connection: conn.clone(),
     };
     conn.object_server()
         .at("/org/freedesktop/Notifications", fd_iface)
         .await
         .context("failed to register freedesktop interface")?;
 
-    // Register custom Slate interface
+    // Register custom Slate interface.
+    // The connection is stored so cross-interface signals reach the correct path.
     let slate_iface = SlateNotifications {
         store: shared_store.clone(),
         history_dir: history_dir.clone(),
+        connection: conn.clone(),
     };
     conn.object_server()
         .at(slate_common::dbus::NOTIFICATIONS_PATH, slate_iface)
@@ -142,12 +193,17 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Final flush
-    let s = shared_store.read().await;
-    if let Err(e) = s.save_active(&active_file) {
-        warn!("failed to persist state on shutdown: {e}");
-    } else {
-        info!("state persisted, shutting down");
+    // Final flush — snapshot while holding the lock, then release before writing.
+    let snapshot = {
+        let s = shared_store.read().await;
+        s.serialize_active()
+    };
+    match snapshot {
+        Ok(content) => {
+            write_active(&active_file, content).await;
+            info!("state persisted, shutting down");
+        }
+        Err(e) => warn!("failed to serialize state on shutdown: {e}"),
     }
 
     Ok(())

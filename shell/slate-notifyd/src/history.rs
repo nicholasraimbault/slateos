@@ -32,14 +32,15 @@ impl HistoryWriter {
     ///
     /// Creates the file if it does not exist. Appends to the existing
     /// notifications array if the file already has content.
-    pub fn append(notification: &Notification, base_dir: &Path) -> Result<(), HistoryError> {
-        std::fs::create_dir_all(base_dir)?;
+    /// Uses `tokio::fs` to avoid blocking the async executor.
+    pub async fn append(notification: &Notification, base_dir: &Path) -> Result<(), HistoryError> {
+        tokio::fs::create_dir_all(base_dir).await?;
 
         let date_str = notification.timestamp.format("%Y-%m-%d").to_string();
         let file_path = base_dir.join(format!("{date_str}.toml"));
 
         let mut day_file = if file_path.exists() {
-            let content = std::fs::read_to_string(&file_path)?;
+            let content = tokio::fs::read_to_string(&file_path).await?;
             toml::from_str::<DayFile>(&content)?
         } else {
             DayFile {
@@ -49,7 +50,7 @@ impl HistoryWriter {
 
         day_file.notifications.push(notification.clone());
         let content = toml::to_string_pretty(&day_file)?;
-        std::fs::write(&file_path, content)?;
+        tokio::fs::write(&file_path, content).await?;
 
         Ok(())
     }
@@ -67,7 +68,8 @@ impl HistoryReader {
     ///
     /// Scans daily files from the `since` date forward, returning at most
     /// `limit` notifications sorted newest-first.
-    pub fn read(
+    /// Uses `tokio::fs` to avoid blocking the async executor.
+    pub async fn read(
         base_dir: &Path,
         since: DateTime<Utc>,
         limit: usize,
@@ -88,7 +90,7 @@ impl HistoryReader {
             if !path.exists() {
                 continue;
             }
-            let content = std::fs::read_to_string(path)?;
+            let content = tokio::fs::read_to_string(path).await?;
             let day_file: DayFile = toml::from_str(&content)?;
             for n in day_file.notifications {
                 if n.timestamp >= since {
@@ -128,52 +130,59 @@ mod tests {
     use super::*;
     use chrono::Duration;
 
-    #[test]
-    fn append_creates_file() {
+    #[tokio::test]
+    async fn append_creates_file() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let n = Notification::new(1, "Firefox", "Tab", "Opened");
 
-        HistoryWriter::append(&n, dir.path()).expect("append");
+        HistoryWriter::append(&n, dir.path()).await.expect("append");
 
         let date_str = n.timestamp.format("%Y-%m-%d").to_string();
         let file_path = dir.path().join(format!("{date_str}.toml"));
         assert!(file_path.exists());
     }
 
-    #[test]
-    fn append_multiple_to_same_day() {
+    #[tokio::test]
+    async fn append_multiple_to_same_day() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let n1 = Notification::new(1, "Firefox", "Tab 1", "Opened");
         let n2 = Notification::new(2, "Firefox", "Tab 2", "Opened");
 
-        HistoryWriter::append(&n1, dir.path()).expect("append 1");
-        HistoryWriter::append(&n2, dir.path()).expect("append 2");
+        HistoryWriter::append(&n1, dir.path())
+            .await
+            .expect("append 1");
+        HistoryWriter::append(&n2, dir.path())
+            .await
+            .expect("append 2");
 
         let date_str = n1.timestamp.format("%Y-%m-%d").to_string();
         let file_path = dir.path().join(format!("{date_str}.toml"));
-        let content = std::fs::read_to_string(file_path).expect("read");
+        let content = tokio::fs::read_to_string(file_path).await.expect("read");
         let day: DayFile = toml::from_str(&content).expect("parse");
         assert_eq!(day.notifications.len(), 2);
     }
 
-    #[test]
-    fn read_empty_dir_returns_empty() {
+    #[tokio::test]
+    async fn read_empty_dir_returns_empty() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let since = Utc::now() - Duration::hours(1);
-        let result = HistoryReader::read(dir.path(), since, 100).expect("read");
+        let result = HistoryReader::read(dir.path(), since, 100)
+            .await
+            .expect("read");
         assert!(result.is_empty());
     }
 
-    #[test]
-    fn read_nonexistent_dir_returns_empty() {
+    #[tokio::test]
+    async fn read_nonexistent_dir_returns_empty() {
         let since = Utc::now() - Duration::hours(1);
-        let result =
-            HistoryReader::read(Path::new("/nonexistent/history"), since, 100).expect("read");
+        let result = HistoryReader::read(Path::new("/nonexistent/history"), since, 100)
+            .await
+            .expect("read");
         assert!(result.is_empty());
     }
 
-    #[test]
-    fn read_returns_notifications_since_timestamp() {
+    #[tokio::test]
+    async fn read_returns_notifications_since_timestamp() {
         let dir = tempfile::tempdir().expect("create temp dir");
 
         let now = Utc::now();
@@ -182,32 +191,40 @@ mod tests {
         let mut recent = Notification::new(2, "App", "Recent", "body");
         recent.timestamp = now;
 
-        HistoryWriter::append(&old, dir.path()).expect("append old");
-        HistoryWriter::append(&recent, dir.path()).expect("append recent");
+        HistoryWriter::append(&old, dir.path())
+            .await
+            .expect("append old");
+        HistoryWriter::append(&recent, dir.path())
+            .await
+            .expect("append recent");
 
         // Read only last hour
         let since = now - Duration::hours(1);
-        let result = HistoryReader::read(dir.path(), since, 100).expect("read");
+        let result = HistoryReader::read(dir.path(), since, 100)
+            .await
+            .expect("read");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].summary, "Recent");
     }
 
-    #[test]
-    fn read_respects_limit() {
+    #[tokio::test]
+    async fn read_respects_limit() {
         let dir = tempfile::tempdir().expect("create temp dir");
 
         for i in 0..10 {
             let n = Notification::new(i, "App", &format!("Notif {i}"), "body");
-            HistoryWriter::append(&n, dir.path()).expect("append");
+            HistoryWriter::append(&n, dir.path()).await.expect("append");
         }
 
         let since = Utc::now() - Duration::hours(1);
-        let result = HistoryReader::read(dir.path(), since, 3).expect("read");
+        let result = HistoryReader::read(dir.path(), since, 3)
+            .await
+            .expect("read");
         assert_eq!(result.len(), 3);
     }
 
-    #[test]
-    fn read_returns_newest_first() {
+    #[tokio::test]
+    async fn read_returns_newest_first() {
         let dir = tempfile::tempdir().expect("create temp dir");
 
         let now = Utc::now();
@@ -216,11 +233,17 @@ mod tests {
         let mut n2 = Notification::new(2, "App", "Newer", "body");
         n2.timestamp = now;
 
-        HistoryWriter::append(&n1, dir.path()).expect("append");
-        HistoryWriter::append(&n2, dir.path()).expect("append");
+        HistoryWriter::append(&n1, dir.path())
+            .await
+            .expect("append");
+        HistoryWriter::append(&n2, dir.path())
+            .await
+            .expect("append");
 
         let since = now - Duration::hours(1);
-        let result = HistoryReader::read(dir.path(), since, 100).expect("read");
+        let result = HistoryReader::read(dir.path(), since, 100)
+            .await
+            .expect("read");
         assert_eq!(result[0].summary, "Newer");
         assert_eq!(result[1].summary, "Older");
     }

@@ -4,7 +4,6 @@
 /// that never resets. Supports DND state, dismissal, and TOML serialization
 /// for crash recovery.
 use std::collections::HashMap;
-use std::path::Path;
 
 use slate_common::notifications::Notification;
 use uuid::Uuid;
@@ -156,25 +155,25 @@ impl NotificationStore {
         }
     }
 
-    /// Persist active notifications to a TOML file.
-    pub fn save_active(&self, path: &Path) -> Result<(), StoreError> {
+    /// Serialize active notifications to a TOML string.
+    ///
+    /// The caller is responsible for writing the string to disk, preferably
+    /// using `tokio::fs::write` to avoid blocking the async executor.
+    pub fn serialize_active(&self) -> Result<String, StoreError> {
         let persisted = PersistedStore {
             next_fd_id: self.next_fd_id,
             dnd: self.dnd,
             notifications: self.notifications.values().cloned().collect(),
         };
-        let content = toml::to_string_pretty(&persisted)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, content)?;
-        Ok(())
+        Ok(toml::to_string_pretty(&persisted)?)
     }
 
-    /// Load active notifications from a TOML file.
-    pub fn load_active(path: &Path) -> Result<Self, StoreError> {
-        let content = std::fs::read_to_string(path)?;
-        let persisted: PersistedStore = toml::from_str(&content)?;
+    /// Deserialize active notifications from a TOML string.
+    ///
+    /// The caller is responsible for reading the string from disk, preferably
+    /// using `tokio::fs::read_to_string` to avoid blocking the async executor.
+    pub fn deserialize_active(content: &str) -> Result<Self, StoreError> {
+        let persisted: PersistedStore = toml::from_str(content)?;
 
         let mut notifications = HashMap::new();
         for n in persisted.notifications {
@@ -368,28 +367,25 @@ mod tests {
     }
 
     #[test]
-    fn save_and_load_round_trip() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("active.toml");
-
+    fn serialize_and_deserialize_round_trip() {
         let mut store = NotificationStore::new();
         let _ = store.add("Firefox", "Tab", "Opened");
         let _ = store.add("Signal", "Message", "Hello");
         store.dnd = true;
+        let next_fd_id = store.next_fd_id;
 
-        store.save_active(&path).expect("save");
-
-        let loaded = NotificationStore::load_active(&path).expect("load");
+        let content = store.serialize_active().expect("serialize");
+        let loaded = NotificationStore::deserialize_active(&content).expect("deserialize");
         assert_eq!(loaded.get_active().len(), 2);
         assert!(loaded.dnd);
         assert!(!loaded.dirty);
         // fd_id counter should be preserved
-        assert_eq!(loaded.next_fd_id, store.next_fd_id);
+        assert_eq!(loaded.next_fd_id, next_fd_id);
     }
 
     #[test]
-    fn load_missing_file_returns_error() {
-        let result = NotificationStore::load_active(Path::new("/nonexistent/active.toml"));
+    fn deserialize_invalid_returns_error() {
+        let result = NotificationStore::deserialize_active("not valid toml {{{{");
         assert!(result.is_err());
     }
 
