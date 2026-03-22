@@ -10,3 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 libc = "0.2"
+zbus = { workspace = true }
+slate-common = { path = "../slate-common" }
+toml = { workspace = true }
+serde = { workspace = true }

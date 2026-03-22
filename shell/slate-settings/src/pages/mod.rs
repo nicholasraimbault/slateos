@@ -8,4 +8,5 @@ pub mod gestures;
 pub mod keyboard;
 pub mod network;
 pub mod notifications;
+pub mod security;
 pub mod wallpaper;

@@ -72,9 +72,51 @@ extern "C" fn sigterm_handler(_sig: libc::c_int) {
 // Actions
 // ---------------------------------------------------------------------------
 
+/// Load the `lock_on_suspend` setting from settings.toml.
+/// Defaults to true if the file is missing or unparseable.
+fn load_lock_on_suspend() -> bool {
+    let Ok(home) = std::env::var("HOME") else {
+        return true;
+    };
+    let path = std::path::Path::new(&home).join(".config/slate/settings.toml");
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    let Ok(settings) = toml::from_str::<slate_common::settings::Settings>(&content) else {
+        return true;
+    };
+    settings.lock.lock_on_suspend
+}
+
+/// Send a Lock call to the lock screen daemon via D-Bus before suspending.
+fn lock_screen() {
+    let conn = match zbus::blocking::Connection::session() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[slate-power] failed to connect to session bus for lock: {e}");
+            return;
+        }
+    };
+    match conn.call_method(
+        Some(slate_common::dbus::LOCKSCREEN_BUS_NAME),
+        slate_common::dbus::LOCKSCREEN_PATH,
+        Some(slate_common::dbus::LOCKSCREEN_INTERFACE),
+        "Lock",
+        &(),
+    ) {
+        Ok(_) => eprintln!("[slate-power] lock screen activated"),
+        Err(e) => eprintln!("[slate-power] lock signal failed: {e}"),
+    }
+    // Brief delay so the lock screen renders before the display turns off.
+    std::thread::sleep(Duration::from_millis(200));
+}
+
 /// Suspend to RAM by writing "mem" to /sys/power/state.
 /// The write blocks until the device wakes up.
-fn suspend() {
+fn suspend(lock_on_suspend: bool) {
+    if lock_on_suspend {
+        lock_screen();
+    }
     eprintln!("[slate-power] suspending");
     match std::fs::write(POWER_STATE_PATH, "mem") {
         Ok(()) => eprintln!("[slate-power] resumed from suspend"),
@@ -117,7 +159,7 @@ fn parse_event(buf: &[u8; INPUT_EVENT_SIZE]) -> (u16, u16, i32) {
 // Main loop
 // ---------------------------------------------------------------------------
 
-fn run(dev_path: &str) -> io::Result<()> {
+fn run(dev_path: &str, lock_on_suspend: bool) -> io::Result<()> {
     let mut file = File::open(dev_path)?;
     let mut buf = [0u8; INPUT_EVENT_SIZE];
     let mut press_start: Option<Instant> = None;
@@ -156,7 +198,7 @@ fn run(dev_path: &str) -> io::Result<()> {
                 let held = start.elapsed();
 
                 if held < SHORT_PRESS_MAX {
-                    suspend();
+                    suspend(lock_on_suspend);
                 } else if held >= LONG_PRESS_MIN {
                     poweroff();
                 }
@@ -177,7 +219,10 @@ fn main() {
 
     install_signal_handler();
 
-    if let Err(e) = run(&args[1]) {
+    let lock_on_suspend = load_lock_on_suspend();
+    eprintln!("[slate-power] lock_on_suspend = {lock_on_suspend}");
+
+    if let Err(e) = run(&args[1], lock_on_suspend) {
         eprintln!("[slate-power] fatal: {e}");
         process::exit(1);
     }
@@ -255,5 +300,13 @@ mod tests {
         let d = Duration::from_secs(3);
         // 3s is >= 3s, so it should poweroff
         assert!(d >= LONG_PRESS_MIN);
+    }
+
+    #[test]
+    fn lock_on_suspend_defaults_true_when_no_config() {
+        // Point HOME at a nonexistent directory — load_lock_on_suspend
+        // should fall back to true (lock by default is safer).
+        std::env::set_var("HOME", "/nonexistent-slate-test-dir");
+        assert!(load_lock_on_suspend());
     }
 }

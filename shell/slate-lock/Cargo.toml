@@ -1,0 +1,30 @@
+[package]
+name = "slate-lock"
+version = "0.1.0"
+edition = "2021"
+description = "Lock screen for Slate OS — serves the org.slate.LockScreen D-Bus interface"
+
+[[bin]]
+name = "slate-lock"
+path = "src/main.rs"
+
+[dependencies]
+slate-common = { path = "../slate-common" }
+tokio = { workspace = true }
+zbus = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = { workspace = true }
+futures-util = "0.3"
+iced = { workspace = true, features = ["tokio"] }
+argon2 = { version = "0.5", features = ["std"] }
+chrono = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+iced_layershell = { workspace = true }
+pam = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

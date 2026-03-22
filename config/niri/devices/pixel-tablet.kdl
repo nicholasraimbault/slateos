@@ -71,6 +71,13 @@ spawn-at-startup "touchflow"
 spawn-at-startup "shoal"
 spawn-at-startup "wvkbd-slate" "--hidden"
 spawn-at-startup "slate-suggest"
+spawn-at-startup "slate-lock"
+
+// Lock screen on idle — matches LockSettings::idle_timeout_secs default (300s)
+idle {
+    timeout-secs 300
+    on-timeout "dbus-send --session --dest=org.slate.LockScreen --type=method_call /org/slate/LockScreen org.slate.LockScreen.Lock"
+}
 
 // Window rules — all apps open maximized on tablet
 window-rule {

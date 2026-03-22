@@ -14,3 +14,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow = { workspace = true }
 nix = { workspace = true }
+argon2 = { version = "0.5", features = ["std"] }

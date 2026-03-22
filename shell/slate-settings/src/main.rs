@@ -19,7 +19,9 @@ use slate_common::toast::{ToastKind, ToastPosition, ToastState};
 use slate_common::{Palette, Settings};
 
 use navigation::Page;
-use pages::{about, ai, display, dock, fex, gestures, keyboard, network, notifications, wallpaper};
+use pages::{
+    about, ai, display, dock, fex, gestures, keyboard, network, notifications, security, wallpaper,
+};
 
 /// Debounce delay: wait this long after last change before saving.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -55,6 +57,8 @@ struct SettingsApp {
     toast_state: ToastState,
     /// Last-fetched Rhea status string (ephemeral, not persisted).
     rhea_status: String,
+    /// Security page ephemeral state (PIN form fields).
+    security_state: security::SecurityPageState,
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +87,8 @@ enum Message {
     Network(network::NetworkMsg),
     /// Notification settings changed.
     Notifications(notifications::NotifMsg),
+    /// Security settings changed.
+    Security(security::SecurityMsg),
     /// About info loaded.
     About(about::AboutMsg),
     /// Debounce timer fired: save settings now.
@@ -117,6 +123,7 @@ impl SettingsApp {
             pending_section: None,
             toast_state: ToastState::new(ToastPosition::BottomCenter),
             rhea_status: "unknown".to_string(),
+            security_state: security::SecurityPageState::default(),
         };
 
         // Kick off background info gathering
@@ -281,6 +288,23 @@ impl SettingsApp {
                 self.mark_changed("notifications");
             }
 
+            Message::Security(msg) => {
+                // PIN operations are ephemeral — only timeout/suspend changes need save.
+                let needs_save = matches!(
+                    msg,
+                    security::SecurityMsg::IdleTimeoutChanged(_)
+                        | security::SecurityMsg::LockOnSuspendToggled(_)
+                );
+                if let Some(task) =
+                    security::update(&mut self.settings.lock, &mut self.security_state, msg)
+                {
+                    return task.map(Message::Security);
+                }
+                if needs_save {
+                    self.mark_changed("lock");
+                }
+            }
+
             Message::About(about::AboutMsg::InfoLoaded(info)) => {
                 self.about_info = info;
             }
@@ -334,6 +358,9 @@ impl SettingsApp {
             Page::Network => network::view(&self.network_state).map(Message::Network),
             Page::Notifications => {
                 notifications::view(&self.settings.notifications).map(Message::Notifications)
+            }
+            Page::Security => {
+                security::view(&self.settings.lock, &self.security_state).map(Message::Security)
             }
             Page::About => about::view(&self.about_info).map(Message::About),
         };

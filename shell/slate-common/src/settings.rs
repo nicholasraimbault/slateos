@@ -36,6 +36,8 @@ pub struct Settings {
     pub keyboard: KeyboardSettings,
     pub rhea: RheaSettings,
     pub notifications: NotificationSettings,
+    #[serde(default)]
+    pub lock: LockSettings,
 }
 
 impl Settings {
@@ -271,6 +273,30 @@ fn default_true() -> bool {
     true
 }
 
+fn default_idle_timeout() -> u64 {
+    300
+}
+
+/// Lock screen preferences.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LockSettings {
+    /// Seconds of idle before auto-lock. 0 = never auto-lock.
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_secs: u64,
+    /// Lock the screen when the device suspends.
+    #[serde(default = "default_true")]
+    pub lock_on_suspend: bool,
+}
+
+impl Default for LockSettings {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: 300,
+            lock_on_suspend: true,
+        }
+    }
+}
+
 /// Notification display preferences.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NotificationSettings {
@@ -320,6 +346,20 @@ mod tests {
         assert!(toml_str.contains("[keyboard]"));
         assert!(toml_str.contains("[rhea]"));
         assert!(toml_str.contains("[notifications]"));
+        assert!(toml_str.contains("[lock]"));
+    }
+
+    #[test]
+    fn lock_settings_default_values() {
+        let s = LockSettings::default();
+        assert_eq!(s.idle_timeout_secs, 300);
+        assert!(s.lock_on_suspend);
+    }
+
+    #[test]
+    fn lock_settings_deserialize_without_section() {
+        let s: LockSettings = toml::from_str("").unwrap_or_default();
+        assert_eq!(s.idle_timeout_secs, 300);
     }
 
     #[test]

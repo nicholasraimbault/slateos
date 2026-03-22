@@ -68,6 +68,13 @@ pub const SHADE_INTERFACE: &str = "org.slate.Shade";
 pub const SHADE_PATH: &str = "/org/slate/Shade";
 
 // ---------------------------------------------------------------------------
+// Lock screen (slate-lock)
+// ---------------------------------------------------------------------------
+pub const LOCKSCREEN_INTERFACE: &str = "org.slate.LockScreen";
+pub const LOCKSCREEN_PATH: &str = "/org/slate/LockScreen";
+pub const LOCKSCREEN_BUS_NAME: &str = "org.slate.LockScreen";
+
+// ---------------------------------------------------------------------------
 // PaletteService — zbus interface for broadcasting palette changes
 // ---------------------------------------------------------------------------
 
@@ -112,6 +119,7 @@ mod tests {
             RHEA_INTERFACE,
             NOTIFICATIONS_INTERFACE,
             SHADE_INTERFACE,
+            LOCKSCREEN_INTERFACE,
         ] {
             assert!(
                 iface.starts_with("org.slate."),
@@ -131,6 +139,7 @@ mod tests {
             RHEA_PATH,
             NOTIFICATIONS_PATH,
             SHADE_PATH,
+            LOCKSCREEN_PATH,
         ] {
             assert!(
                 path.starts_with("/org/slate/"),
@@ -157,5 +166,10 @@ mod tests {
     #[test]
     fn touchflow_bus_name_matches_interface() {
         assert_eq!(TOUCHFLOW_BUS_NAME, TOUCHFLOW_INTERFACE);
+    }
+
+    #[test]
+    fn lockscreen_bus_name_matches_interface() {
+        assert_eq!(LOCKSCREEN_BUS_NAME, LOCKSCREEN_INTERFACE);
     }
 }

@@ -67,6 +67,13 @@ spawn-at-startup "swaybg" "-i" "/usr/share/backgrounds/slate-default.jpg" "-m" "
 spawn-at-startup "waybar"
 spawn-at-startup "slate-palette"
 spawn-at-startup "shoal"
+spawn-at-startup "slate-lock"
+
+// Lock screen on idle — matches LockSettings::idle_timeout_secs default (300s)
+idle {
+    timeout-secs 300
+    on-timeout "dbus-send --session --dest=org.slate.LockScreen --type=method_call /org/slate/LockScreen org.slate.LockScreen.Lock"
+}
 
 // Window rules
 window-rule {
