@@ -27,10 +27,13 @@ Kernel (device-specific)
   └── Shell components (Rust, iced + layer-shell)
         ├── shoal — dock (bottom bar, magnification, context menus, pin/unpin)
         ├── slate-launcher — app launcher (fullscreen grid, recent apps, search)
-        ├── claw-panel — AI sidebar (WebSocket to OpenClaw, streaming responses)
+        ├── rhea — AI engine daemon (routes to local llama.cpp or cloud backends)
+        ├── slate-notifyd — notification daemon (freedesktop + slate D-Bus, history, grouping)
+        ├── slate-shade — notification shade + quick settings (pull-down, heads-up banners)
+        ├── claw-panel — AI sidebar (streaming responses via Rhea D-Bus)
         ├── slate-suggest — keyboard suggestion bar (history + LLM suggestions)
         ├── slate-palette — theming daemon (wallpaper → Material You colors)
-        ├── touchflow — gesture daemon (evdev → niri IPC + D-Bus)
+        ├── touchflow — gesture daemon (evdev → niri IPC + D-Bus, continuous edge gestures)
         ├── slate-settings — settings app (WiFi, display, gestures, AI, FEX)
         └── slate-power — power button monitor (suspend/poweroff)
 
@@ -65,9 +68,31 @@ Each service directory contains:
 
 ## Communication
 
-- **D-Bus** — inter-component communication (palette changes, settings updates, gesture events)
-- **Niri IPC** — TouchFlow ↔ niri (workspace switching, window management)
-- **WebSocket** — Claw Panel ↔ OpenClaw (AI queries/responses)
+- **D-Bus** — inter-component communication (palette changes, settings updates, gesture events, notifications, AI requests)
+- **Niri IPC** — TouchFlow ↔ niri (workspace switching, window management), Rhea context (focused window)
+- **HTTP** — Rhea ↔ AI backends (OpenAI-compatible API for cloud providers and local llama-server)
+
+## AI Architecture
+
+```
+User input (Claw Panel, slate-shade)
+  → D-Bus call to org.slate.Rhea
+  → Rhea routes to configured backend
+    ├── Cloud: reqwest POST to OpenAI-compatible endpoint (Claude, OpenAI, Ollama)
+    └── Local: llama-server subprocess (HTTP, model lifecycle management)
+  → Response streamed back via D-Bus signals (CompletionChunk, CompletionDone)
+```
+
+## Notification Architecture
+
+```
+App sends notification
+  → org.freedesktop.Notifications.Notify (standard protocol)
+  → slate-notifyd stores, groups, persists, emits D-Bus signals
+  → slate-shade receives signals, displays:
+    ├── Heads-up banner (urgent/normal, auto-dismiss)
+    └── Pull-down shade (grouped list, quick settings, AI summaries)
+```
 
 ## Theming Flow
 

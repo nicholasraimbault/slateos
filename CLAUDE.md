@@ -35,11 +35,14 @@ Boot chain: bootloader → kernel → initramfs → pid1 → arkhd → services
 ```
 slateos/
 ├── shell/                    ← Rust crates (the slate shell)
-│   ├── slate-common/         ← shared types: palette, D-Bus, settings, iced theme
+│   ├── slate-common/         ← shared types: palette, D-Bus, settings, iced theme, AI, physics, notifications
 │   ├── touchflow/            ← multitouch gesture daemon (evdev → Niri IPC + D-Bus)
 │   ├── shoal/                ← Wayland dock (iced + layer-shell, magnification)
 │   ├── slate-launcher/       ← fullscreen app launcher (iced + layer-shell)
-│   ├── claw-panel/           ← OpenClaw AI sidebar (iced + layer-shell, WebSocket)
+│   ├── rhea/                 ← AI engine daemon (D-Bus, routes to local/cloud backends)
+│   ├── slate-notifyd/        ← notification daemon (freedesktop + slate D-Bus, history)
+│   ├── slate-shade/          ← notification shade + quick settings (iced + layer-shell)
+│   ├── claw-panel/           ← AI sidebar (iced + layer-shell, Rhea D-Bus)
 │   ├── slate-palette/        ← dynamic theming (wallpaper → Material You → D-Bus)
 │   ├── slate-suggest/        ← keyboard suggestion bar (iced + layer-shell)
 │   ├── slate-settings/       ← settings app (iced, settings.toml)
@@ -64,7 +67,7 @@ slateos/
 - Input: evdev crate (raw multitouch)
 - Config: TOML (serde + toml crate)
 - Async: tokio
-- HTTP/WS: reqwest + tokio-tungstenite (Claw Panel ↔ OpenClaw)
+- HTTP: reqwest (Rhea ↔ AI backends)
 
 ## Coding Conventions
 - No unsafe unless absolutely required + documented
@@ -82,16 +85,20 @@ slateos/
 3. All components use zbus for D-Bus communication
 4. All iced apps share theming through slate-common::theme module
 5. TouchFlow is the ONLY component that reads /dev/input directly
-6. Claw Panel is the ONLY component that talks to OpenClaw API
+6. Rhea is the ONLY component that does AI inference. All components talk to Rhea via D-Bus.
+7. slate-notifyd is the ONLY notification store. All components read/write notifications via D-Bus.
 
 ## Cross-Crate Dependency Rules
-slate-common ← (all other crates depend on this)
-touchflow    ← standalone daemon, depends on slate-common
-slate-palette ← standalone daemon, depends on slate-common
-shoal        ← iced app, depends on slate-common
+slate-common   ← (all other crates depend on this)
+touchflow      ← standalone daemon, depends on slate-common
+slate-palette  ← standalone daemon, depends on slate-common
+rhea           ← AI engine daemon, depends on slate-common
+slate-notifyd  ← notification daemon, depends on slate-common
+slate-shade    ← iced app, depends on slate-common (listens to notifyd, rhea, touchflow)
+shoal          ← iced app, depends on slate-common
 slate-launcher ← iced app, depends on slate-common
-claw-panel   ← iced app, depends on slate-common
-slate-suggest ← iced app, depends on slate-common
+claw-panel     ← iced app, depends on slate-common (talks to rhea via D-Bus)
+slate-suggest  ← iced app, depends on slate-common
 slate-settings ← iced app, depends on slate-common
 
 ## Build
