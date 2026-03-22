@@ -152,6 +152,8 @@ pub const LOCKSCREEN_PATH: &str = "/org/slate/LockScreen";
 pub const LOCKSCREEN_INTERFACE: &str = "org.slate.LockScreen";
 ```
 
+Update the `constants_are_well_formed()` test arrays in `dbus.rs` to include the new constants.
+
 Interface definition (`shell/slate-lock/src/dbus.rs`):
 ```
 org.slate.LockScreen at /org/slate/LockScreen:
@@ -172,15 +174,23 @@ No `Unlock()` method — unlocking is only via user authentication through the U
 
 ### Settings Model
 
-Add to `shell/slate-common/src/settings.rs`:
+Add to `shell/slate-common/src/settings.rs`. Wire into the top-level `Settings` struct as `pub lock: LockSettings` (alongside existing `display`, `dock`, `rhea`, `notifications` fields). Update the `default_settings_produce_valid_toml()` test to include the `[lock]` section:
 ```rust
 pub struct LockSettings {
     /// Seconds of idle before auto-lock. 0 = never auto-lock.
     pub idle_timeout_secs: u64,
     /// Lock the screen when the device suspends.
     pub lock_on_suspend: bool,
-    /// Argon2 hash of the user's PIN. None = no PIN set.
-    pub pin_hash: Option<String>,
+}
+```
+
+**PIN hash storage** is NOT in `settings.toml`. The PIN hash lives in a separate file `~/.config/slate/lock.toml` with `0600` permissions (owner-only read/write). This prevents other components or processes from reading the hash. The `auth.rs` module reads/writes this file directly:
+
+```rust
+// ~/.config/slate/lock.toml
+// Permissions: 0600
+pub struct LockCredential {
+    pub pin_hash: String,
 }
 
 impl Default for LockSettings {
@@ -202,7 +212,7 @@ New page `shell/slate-settings/src/pages/security.rs`:
 - **Change PIN** — form: enter current PIN (if set), enter new PIN, confirm new PIN. Stores argon2 hash.
 - **Remove PIN** — button (requires current PIN to confirm)
 
-Add `Page::Security` to navigation with lock icon.
+Add `Page::Security` to navigation with lock icon ("\u{1f512}"). Update `Page::all()` to include it. Update the existing `page_list_has_all_expected_pages` test assertion count (currently 10 → 11).
 
 ---
 
@@ -211,45 +221,52 @@ Add `Page::Security` to navigation with lock icon.
 In `shell/slate-power/src/main.rs`, before the suspend write:
 
 ```rust
-// Lock screen before suspend (if lock_on_suspend is enabled)
-if lock_on_suspend {
-    // Fire-and-forget D-Bus call to Lock
-    // Use std::process::Command to call dbus-send (slate-power has no async runtime)
-    let _ = std::process::Command::new("dbus-send")
-        .args([
-            "--session",
-            "--dest=org.slate.LockScreen",
-            "--type=method_call",
-            "/org/slate/LockScreen",
-            "org.slate.LockScreen.Lock",
-        ])
-        .spawn();
+// Lock screen before suspend
+fn lock_screen() {
+    let Ok(conn) = zbus::blocking::Connection::session() else {
+        tracing::warn!("failed to connect to session bus for lock");
+        return;
+    };
+    let _ = conn.call_method(
+        Some("org.slate.LockScreen"),
+        "/org/slate/LockScreen",
+        Some("org.slate.LockScreen"),
+        "Lock",
+        &(),
+    );
     // Brief sleep to let the lock screen activate before suspend
     std::thread::sleep(std::time::Duration::from_millis(200));
 }
-
-// Then suspend
-std::fs::write("/sys/power/state", "mem").ok();
 ```
 
-Using `dbus-send` subprocess because slate-power is a minimal blocking daemon with no async runtime or zbus dependency.
+Add `zbus` dependency to `shell/slate-power/Cargo.toml` (blocking feature only — no tokio required). The `lock_on_suspend` setting is read via `slate_common::settings::Settings::load()` at startup and cached. Add `slate-common` as a dependency to slate-power.
 
 ---
 
 ## niri Configuration
 
-Add idle lock config to `config/niri/` device configs:
+niri does not have a built-in idle timeout config block. Use `swayidle` — the standard Wayland idle daemon — as a separate arkhe service.
 
+Add to `config/niri/` device configs:
 ```kdl
 spawn-at-startup "slate-lock"
-
-idle {
-    timeout-secs 300
-    on-timeout "dbus-send --session --dest=org.slate.LockScreen --type=method_call /org/slate/LockScreen org.slate.LockScreen.Lock"
-}
 ```
 
-The `timeout-secs` value should match `LockSettings::idle_timeout_secs`. When the user changes the timeout in settings, the niri config would need to be regenerated — but for v1, a static config value is acceptable. Dynamic reconfiguration can be added later via `niri msg`.
+Create `services/base/swayidle/run`:
+```sh
+#!/bin/sh
+exec swayidle -w \
+  timeout 300 'dbus-send --session --dest=org.slate.LockScreen --type=method_call /org/slate/LockScreen org.slate.LockScreen.Lock'
+```
+
+Create `services/base/swayidle/depends`:
+```
+niri
+```
+
+Add `swayidle` to `build/build-rootfs.sh` package list.
+
+The 300-second timeout is a static default. When the user changes the idle timeout in settings, slate-lock can kill and respawn the swayidle process with the new timeout value via `ark` CLI or by writing a new swayidle config.
 
 ---
 
@@ -257,7 +274,7 @@ The `timeout-secs` value should match `LockSettings::idle_timeout_secs`. When th
 
 Lock screen shows a limited notification preview:
 - Fetch from `org.slate.Notifications.GetActive()` on lock activation
-- Show max 3 most recent notifications (summary + app_name only — no body text for privacy)
+- Show max 3 most recent notifications (summary + app_name only — no body text for privacy). Body stripping is done client-side in slate-lock's `notifications.rs` — notifyd's `GetActive` returns full notifications, slate-lock renders only `app_name` and `summary`.
 - Subscribe to `Added` signal to update while locked
 - Tapping a notification does NOT open it (device is locked) — just visual awareness
 
@@ -275,7 +292,7 @@ LayerShellSettings {
 }
 ```
 
-The lock screen starts hidden. On `Lock` signal, it becomes visible. On unlock, it hides. The surface stays mapped but transparent/zero-size when unlocked to avoid re-creation overhead.
+The lock screen starts hidden using the same `size: Some((0, 1))` pattern as slate-shade (height=1 pixel, effectively invisible). On `Lock` signal, it resizes to fullscreen (`(0, 0)` = compositor-determined). On unlock, it shrinks back to `(0, 1)`. The surface stays mapped to avoid re-creation overhead. `KeyboardInteractivity` is set to `Exclusive` only when locked, `None` when hidden (so it doesn't steal keyboard focus from other apps).
 
 ---
 
@@ -310,5 +327,8 @@ The lock screen starts hidden. On `Lock` signal, it becomes visible. On unlock, 
 | `shell/slate-settings/src/navigation.rs` | Add Page::Security |
 | `services/base/slate-lock/run` | `exec /usr/lib/slate/slate-lock` |
 | `services/base/slate-lock/depends` | `dbus`, `niri` |
-| `build/build-rootfs.sh` | Add linux-pam, shadow packages |
-| `config/niri/` | Add idle lock configuration |
+| `services/base/swayidle/run` | swayidle idle timeout → Lock |
+| `services/base/swayidle/depends` | `niri` |
+| `shell/slate-power/Cargo.toml` | Add zbus (blocking), slate-common deps |
+| `build/build-rootfs.sh` | Add linux-pam, shadow, swayidle packages |
+| `config/niri/` | Add `spawn-at-startup "slate-lock"` |
