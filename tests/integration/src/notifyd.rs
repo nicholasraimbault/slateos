@@ -223,21 +223,54 @@ async fn dnd_property_round_trip() {
     .await
     .unwrap();
 
-    let slate = slate_notif_proxy(&conn).await.unwrap();
+    // Use org.freedesktop.DBus.Properties directly to avoid zbus proxy caching.
+    let props = crate::harness::slate_proxy(
+        &conn,
+        NOTIFICATIONS_BUS_NAME,
+        NOTIFICATIONS_PATH,
+        "org.freedesktop.DBus.Properties",
+    )
+    .await
+    .unwrap();
 
     // Read initial DND state.
-    let dnd: bool = slate.get_property("Dnd").await.unwrap();
-    assert!(!dnd, "DND should default to false");
+    let reply = props
+        .call_method("Get", &(NOTIFICATIONS_INTERFACE, "Dnd"))
+        .await
+        .unwrap();
+    let dnd: zbus::zvariant::OwnedValue = reply.body().deserialize().unwrap();
+    let dnd_bool: bool = dnd.try_into().unwrap();
+    assert!(!dnd_bool, "DND should default to false");
 
     // Enable DND.
-    slate.set_property("Dnd", true).await.unwrap();
-    let dnd: bool = slate.get_property("Dnd").await.unwrap();
-    assert!(dnd, "DND should be true after setting");
+    let true_val = zbus::zvariant::Value::from(true);
+    props
+        .call_method("Set", &(NOTIFICATIONS_INTERFACE, "Dnd", true_val))
+        .await
+        .unwrap();
+
+    let reply = props
+        .call_method("Get", &(NOTIFICATIONS_INTERFACE, "Dnd"))
+        .await
+        .unwrap();
+    let dnd: zbus::zvariant::OwnedValue = reply.body().deserialize().unwrap();
+    let dnd_bool: bool = dnd.try_into().unwrap();
+    assert!(dnd_bool, "DND should be true after setting");
 
     // Disable DND.
-    slate.set_property("Dnd", false).await.unwrap();
-    let dnd: bool = slate.get_property("Dnd").await.unwrap();
-    assert!(!dnd, "DND should be false after unsetting");
+    let false_val = zbus::zvariant::Value::from(false);
+    props
+        .call_method("Set", &(NOTIFICATIONS_INTERFACE, "Dnd", false_val))
+        .await
+        .unwrap();
+
+    let reply = props
+        .call_method("Get", &(NOTIFICATIONS_INTERFACE, "Dnd"))
+        .await
+        .unwrap();
+    let dnd: zbus::zvariant::OwnedValue = reply.body().deserialize().unwrap();
+    let dnd_bool: bool = dnd.try_into().unwrap();
+    assert!(!dnd_bool, "DND should be false after unsetting");
 
     daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
 }
