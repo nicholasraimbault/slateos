@@ -16,16 +16,17 @@ mod layout;
 mod notifications;
 mod quick_settings;
 mod shade;
+mod style;
 mod update;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use iced::widget::column;
 use iced::{Element, Subscription, Task, Theme};
 
 use heads_up::{HeadsUp, HeadsUpAction};
-use layout::{detect_layout, LayoutMode};
+use layout::{detect_layout, detect_layout_from_niri, LayoutMode};
 use notifications::{NotifAction, NotificationGroup};
 use quick_settings::{QsAction, QuickSettingsState};
 use shade::{ShadeAction, ShadeAnimState};
@@ -74,6 +75,16 @@ struct SlateShade {
     palette: Palette,
     /// Logical screen height used to compute shade pixel height.
     screen_height: f32,
+    /// App names waiting for an AI summary from Rhea, in request order.
+    ///
+    /// When the shade calls `Rhea.Summarize(app_name, text)`, it pushes
+    /// `app_name` here. When `RheaCompletionDone` arrives, we pop the
+    /// front entry and route the summary to that group. This gives correct
+    /// ordering for sequential requests.
+    ///
+    /// TODO: a proper correlation ID in the Rhea protocol would be the ideal
+    /// long-term fix (avoids any ordering assumptions entirely).
+    pending_summaries: VecDeque<String>,
 }
 
 impl Default for SlateShade {
@@ -87,6 +98,7 @@ impl Default for SlateShade {
             layout: detect_layout(DEFAULT_SCREEN_WIDTH),
             palette: Palette::default(),
             screen_height: DEFAULT_SCREEN_HEIGHT,
+            pending_summaries: VecDeque::new(),
         }
     }
 }
@@ -113,6 +125,8 @@ enum Message {
     AnimTick,
     // HUN auto-dismiss tick
     HunTick,
+    // Layout detected from niri IPC at startup
+    LayoutDetected(LayoutMode),
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +226,11 @@ impl iced_layershell::Application for SlateShade {
     type Flags = ();
 
     fn new(_flags: ()) -> (Self, Task<Message>) {
-        (Self::default(), Task::none())
+        // Query niri for the real output width so the shade renders the
+        // correct layout on first paint rather than relying on the compile-time
+        // DEFAULT_SCREEN_WIDTH constant.
+        let layout_task = Task::perform(detect_layout_from_niri(), Message::LayoutDetected);
+        (Self::default(), layout_task)
     }
 
     fn namespace(&self) -> String {
@@ -290,7 +308,10 @@ fn run_app() -> anyhow::Result<()> {
         DEFAULT_SCREEN_WIDTH as f32,
         DEFAULT_SCREEN_HEIGHT * 0.65,
     ))
-    .run_with(|| (SlateShade::default(), Task::none()))?;
+    .run_with(|| {
+        let layout_task = Task::perform(detect_layout_from_niri(), Message::LayoutDetected);
+        (SlateShade::default(), layout_task)
+    })?;
     Ok(())
 }
 

@@ -13,8 +13,8 @@ use uuid::Uuid;
 #[cfg(target_os = "linux")]
 use slate_common::dbus::{
     NOTIFICATIONS_BUS_NAME, NOTIFICATIONS_INTERFACE, NOTIFICATIONS_PATH, PALETTE_BUS_NAME,
-    PALETTE_INTERFACE, PALETTE_PATH, RHEA_BUS_NAME, RHEA_INTERFACE, RHEA_PATH, TOUCHFLOW_INTERFACE,
-    TOUCHFLOW_PATH,
+    PALETTE_INTERFACE, PALETTE_PATH, RHEA_BUS_NAME, RHEA_INTERFACE, RHEA_PATH, TOUCHFLOW_BUS_NAME,
+    TOUCHFLOW_INTERFACE, TOUCHFLOW_PATH,
 };
 
 #[cfg(all(test, not(target_os = "linux")))]
@@ -259,7 +259,7 @@ async fn watch_touchflow(
 
     let proxy = zbus::Proxy::new(
         &conn,
-        "org.slate.TouchFlow",
+        TOUCHFLOW_BUS_NAME,
         TOUCHFLOW_PATH,
         TOUCHFLOW_INTERFACE,
     )

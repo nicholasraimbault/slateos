@@ -14,6 +14,8 @@ use slate_common::notifications::{Notification, Urgency};
 use slate_common::Palette;
 use uuid::Uuid;
 
+use crate::style::{chip_button_style, ghost_button_style};
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -202,9 +204,8 @@ pub fn view_heads_up<'a>(hun: &'a HeadsUp, palette: &Palette) -> Element<'a, Hea
         }
     };
 
-    // Compute visual offset from swipe progress (banner slides up).
-    let y_offset = state.swipe_progress * HUN_HEIGHT;
-    let _ = y_offset; // used in production compositor offset; not in iced layout
+    // The swipe-up offset is applied at the compositor level via the
+    // iced_layershell margin API; it is not modelled in iced layout geometry.
 
     let bg = hun_background(&state.notification, palette);
     let text_color = Palette::color_to_iced(palette.neutral);
@@ -271,38 +272,6 @@ fn hun_background(notif: &Notification, palette: &Palette) -> Color {
             let s = palette.container;
             Color::from_rgba8(s[0], s[1], s[2], 0.95)
         }
-    }
-}
-
-fn ghost_button_style(theme: &Theme, _status: button::Status) -> button::Style {
-    button::Style {
-        background: None,
-        text_color: theme.palette().text,
-        border: iced::Border::default(),
-        shadow: iced::Shadow::default(),
-    }
-}
-
-fn chip_button_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.palette();
-    let bg = match status {
-        button::Status::Hovered | button::Status::Pressed => iced::Background::Color(Color {
-            a: 0.3,
-            ..palette.primary
-        }),
-        _ => iced::Background::Color(Color {
-            a: 0.15,
-            ..palette.primary
-        }),
-    };
-    button::Style {
-        background: Some(bg),
-        text_color: palette.primary,
-        border: iced::Border {
-            radius: 16.0.into(),
-            ..Default::default()
-        },
-        shadow: iced::Shadow::default(),
     }
 }
 

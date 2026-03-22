@@ -33,6 +33,9 @@ pub(super) fn update_app(app: &mut SlateShade, message: Message) -> Task<Message
         Message::HunTick => {
             app.hun.tick();
         }
+        Message::LayoutDetected(mode) => {
+            app.layout = mode;
+        }
     }
     Task::none()
 }
@@ -62,19 +65,19 @@ fn handle_dbus_event(app: &mut SlateShade, event: dbus_listener::DbusEvent) {
             tracing::debug!("slate-shade: Rhea chunk ({} bytes)", chunk.len());
         }
         dbus_listener::DbusEvent::RheaCompletionDone(full_text) => {
-            // A completed Rhea response arrived. The shade uses these for AI
-            // group summaries — the group key is not yet threaded through the
-            // signal, so we store the most-recent completion for the first
-            // group that has no summary yet.
+            // Route the completed Rhea response to the group that requested it.
+            // We pop the oldest pending entry so that concurrent requests are
+            // fulfilled in the same order they were sent.
+            //
+            // TODO: a proper correlation ID in the Rhea protocol would be the
+            // ideal long-term fix (avoids all ordering assumptions entirely).
             tracing::debug!("slate-shade: Rhea done ({} bytes)", full_text.len());
-            // Collect the group key first to avoid a simultaneous mutable borrow.
-            let target_key = app
-                .groups
-                .iter()
-                .find(|g| g.ai_summary.is_none())
-                .map(|g| g.app_name.clone());
-            if let Some(key) = target_key {
-                set_ai_summary(&mut app.groups, &key, full_text);
+            if let Some(app_name) = app.pending_summaries.pop_front() {
+                set_ai_summary(&mut app.groups, &app_name, full_text);
+            } else {
+                tracing::warn!(
+                    "slate-shade: RheaCompletionDone arrived but no pending summary request found"
+                );
             }
         }
         dbus_listener::DbusEvent::RheaCompletionError(error) => {
@@ -108,16 +111,17 @@ fn handle_notif_action(app: &mut SlateShade, action: NotifAction) {
         NotifAction::Dismiss(uuid) => {
             remove_notification(&mut app.groups, uuid);
             app.smart_replies.remove(&uuid);
-            // D-Bus dismiss call would go here in a full implementation.
+            // TODO: call org.slate.Notifications.Dismiss(uuid) via D-Bus.
         }
         NotifAction::DismissGroup(app_name) => {
             remove_group(&mut app.groups, &app_name);
+            // TODO: call org.slate.Notifications.DismissGroup(app_name) via D-Bus.
         }
         NotifAction::ToggleGroup(app_name) => {
             toggle_group(&mut app.groups, &app_name);
         }
         NotifAction::InvokeAction(_uuid, _key) => {
-            // D-Bus invoke_action call would go here.
+            // TODO: call org.slate.Notifications.InvokeAction(uuid, action_key) via D-Bus.
         }
         NotifAction::SendReply(_uuid, _reply) => {
             // Smart reply dispatch would go here.
@@ -146,7 +150,7 @@ fn handle_hun_action(app: &mut SlateShade, action: HeadsUpAction) {
         }
         HeadsUpAction::InvokeAction(_uuid, _key) => {
             app.hun.dismiss();
-            // D-Bus invoke_action call would go here.
+            // TODO: call org.slate.Notifications.InvokeAction(uuid, action_key) via D-Bus.
         }
     }
 }

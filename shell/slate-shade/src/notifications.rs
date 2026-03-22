@@ -15,6 +15,8 @@ use slate_common::notifications::{Notification, Urgency};
 use slate_common::Palette;
 use uuid::Uuid;
 
+use crate::style::{chip_button_style, ghost_button_style};
+
 // ---------------------------------------------------------------------------
 // Layout constants
 // ---------------------------------------------------------------------------
@@ -303,40 +305,6 @@ fn card_bg_color(urgency: Urgency, read: bool, palette: &Palette) -> Color {
 fn muted_color(palette: &Palette) -> Color {
     let c = Palette::color_to_iced(palette.neutral);
     Color { a: 0.6, ..c }
-}
-
-/// Ghost (transparent) button style for dismiss / expand toggles.
-fn ghost_button_style(theme: &Theme, _status: button::Status) -> button::Style {
-    button::Style {
-        background: None,
-        text_color: theme.palette().text,
-        border: iced::Border::default(),
-        shadow: iced::Shadow::default(),
-    }
-}
-
-/// Chip-style button for action and smart-reply buttons.
-fn chip_button_style(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.palette();
-    let bg = match status {
-        button::Status::Hovered | button::Status::Pressed => iced::Background::Color(Color {
-            a: 0.3,
-            ..palette.primary
-        }),
-        _ => iced::Background::Color(Color {
-            a: 0.15,
-            ..palette.primary
-        }),
-    };
-    button::Style {
-        background: Some(bg),
-        text_color: palette.primary,
-        border: iced::Border {
-            radius: (CHIP_PADDING * 2.0).into(),
-            ..Default::default()
-        },
-        shadow: iced::Shadow::default(),
-    }
 }
 
 // ---------------------------------------------------------------------------
