@@ -229,7 +229,7 @@ impl SettingsApp {
             }
 
             Message::Ai(msg) => {
-                if let Some(task) = ai::update(&mut self.settings.ai, &mut self.ai_models, msg) {
+                if let Some(task) = ai::update(&mut self.settings.rhea, &mut self.ai_models, msg) {
                     return task.map(Message::Ai);
                 }
                 self.mark_changed("ai");
@@ -307,7 +307,7 @@ impl SettingsApp {
             Page::Dock => dock::view(&self.settings.dock).map(Message::Dock),
             Page::Gestures => gestures::view(&self.settings.gestures).map(Message::Gesture),
             Page::Keyboard => keyboard::view(&self.settings.keyboard).map(Message::Keyboard),
-            Page::Ai => ai::view(&self.settings.ai, &self.ai_models).map(Message::Ai),
+            Page::Ai => ai::view(&self.settings.rhea, &self.ai_models).map(Message::Ai),
             Page::Fex => fex::view(&self.fex_state).map(Message::Fex),
             Page::Network => network::view(&self.network_state).map(Message::Network),
             Page::About => about::view(&self.about_info).map(Message::About),
@@ -345,9 +345,7 @@ impl SettingsApp {
 
         // Toast expiry tick: only run while toasts are visible
         if !self.toast_state.is_empty() {
-            subs.push(
-                iced::time::every(Duration::from_millis(250)).map(|_| Message::ToastTick),
-            );
+            subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::ToastTick));
         }
 
         Subscription::batch(subs)
