@@ -837,9 +837,7 @@ fn top_edge_full_lifecycle() {
         time: now + Duration::from_millis(50),
     });
     assert_eq!(u1.len(), 1);
-    assert!(
-        matches!(&u1[0], GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::Update)
-    );
+    assert!(matches!(&u1[0], GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::Update));
 
     // Update 2 — further down.
     let u2 = r.on_event(&InputEvent::FingerMove {
