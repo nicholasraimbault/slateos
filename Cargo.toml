@@ -11,6 +11,7 @@ members = [
     "shell/slate-settings",
     "shell/slate-power",
     "shell/slate-notifyd",
+    "shell/rhea",
     "tools/slate",
 ]
 
