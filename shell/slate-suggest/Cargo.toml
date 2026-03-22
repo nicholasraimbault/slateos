@@ -8,9 +8,6 @@ slate-common = { path = "../slate-common" }
 iced = { workspace = true }
 tokio = { workspace = true }
 zbus = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = "1"
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
