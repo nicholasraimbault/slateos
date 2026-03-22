@@ -10,6 +10,7 @@
 // Most D-Bus infrastructure and layer-shell wiring is Linux-only.
 // On macOS/dev machines the shade falls back to a plain windowed iced app.
 #![allow(dead_code)] // D-Bus and gesture wiring is Linux-only
+mod actions;
 mod dbus_listener;
 mod heads_up;
 mod layout;
@@ -127,6 +128,15 @@ enum Message {
     HunTick,
     // Layout detected from niri IPC at startup
     LayoutDetected(LayoutMode),
+    // Result of a Notifications.Dismiss D-Bus call. Errors are logged; no UI update needed
+    // because the local state was already updated optimistically.
+    DismissResult(Result<(), String>),
+    // Result of a Notifications.DismissGroup D-Bus call.
+    DismissGroupResult(Result<(), String>),
+    // Result of a Notifications.InvokeAction D-Bus call.
+    InvokeActionResult(Result<(), String>),
+    // Smart-reply suggestions returned by Rhea.SuggestReplies.
+    SmartRepliesResult(uuid::Uuid, Vec<String>),
 }
 
 // ---------------------------------------------------------------------------
