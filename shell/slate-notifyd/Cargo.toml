@@ -1,0 +1,25 @@
+[package]
+name = "slate-notifyd"
+version = "0.1.0"
+edition = "2021"
+description = "Notification daemon for Slate OS — freedesktop D-Bus spec with persistent history"
+
+[[bin]]
+name = "slate-notifyd"
+path = "src/main.rs"
+
+[dependencies]
+slate-common = { path = "../slate-common" }
+zbus = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
