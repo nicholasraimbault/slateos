@@ -74,6 +74,43 @@ impl TouchFlowEmitter {
     }
 
     // -----------------------------------------------------------------------
+    // EdgeGesture signal
+    // -----------------------------------------------------------------------
+
+    /// Emit a continuous edge gesture signal on the `org.slate.TouchFlow` bus.
+    pub async fn emit_edge_gesture(
+        &self,
+        edge: &str,
+        phase: &str,
+        progress: f64,
+        velocity: f64,
+    ) -> Result<()> {
+        debug!(edge, phase, progress, velocity, "emitting EdgeGesture signal");
+        let result = self
+            .connection
+            .call_method(
+                Some(dbus::TOUCHFLOW_INTERFACE.to_owned()),
+                dbus::TOUCHFLOW_PATH,
+                Some(dbus::TOUCHFLOW_INTERFACE.to_owned()),
+                "EdgeGesture",
+                &(edge, phase, progress, velocity),
+            )
+            .await;
+
+        match result {
+            Ok(_) => {
+                debug!("EdgeGesture signal sent");
+                Ok(())
+            }
+            Err(e) => {
+                // Non-fatal: listeners may not be connected yet.
+                warn!(%e, "EdgeGesture signal failed (no listeners may be connected)");
+                Err(anyhow::anyhow!("EdgeGesture signal failed: {e}"))
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Internal helper
     // -----------------------------------------------------------------------
 
@@ -125,6 +162,12 @@ pub mod mock {
         HideLauncher,
         ShowClaw,
         HideClaw,
+        EdgeGesture {
+            edge: String,
+            phase: String,
+            progress: u64,   // stored as bits for PartialEq
+            velocity: u64,   // stored as bits for PartialEq
+        },
     }
 
     #[derive(Debug, Clone)]
@@ -166,6 +209,22 @@ pub mod mock {
 
         pub async fn hide_claw(&self) -> Result<()> {
             self.calls.lock().unwrap().push(EmitterCall::HideClaw);
+            Ok(())
+        }
+
+        pub async fn emit_edge_gesture(
+            &self,
+            edge: &str,
+            phase: &str,
+            progress: f64,
+            velocity: f64,
+        ) -> Result<()> {
+            self.calls.lock().unwrap().push(EmitterCall::EdgeGesture {
+                edge: edge.to_owned(),
+                phase: phase.to_owned(),
+                progress: progress.to_bits(),
+                velocity: velocity.to_bits(),
+            });
             Ok(())
         }
 

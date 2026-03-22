@@ -86,9 +86,10 @@ async fn main() -> Result<()> {
         loop {
             tokio::select! {
                 Some(event) = rx.recv() => {
-                    if let Some(gesture) = recognizer.on_event(&event) {
+                    let gestures = recognizer.on_event(&event);
+                    for gesture in &gestures {
                         info!(?gesture, "gesture recognized");
-                        if let Err(e) = dispatch::dispatch_gesture(&gesture, &niri, &emitter, &config).await {
+                        if let Err(e) = dispatch::dispatch_gesture(gesture, &niri, &emitter, &config).await {
                             error!(%e, "dispatch failed");
                         }
                     }

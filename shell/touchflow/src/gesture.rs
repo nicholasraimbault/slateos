@@ -5,7 +5,7 @@
 /// All logic is pure — no I/O — so it can be tested with synthetic events.
 use std::time::{Duration, Instant};
 
-use crate::edge::{classify_edge, Edge, EdgeConfig};
+use crate::edge::{classify_edge, Edge, EdgeConfig, EdgeGesture, GesturePhase};
 use crate::input::{self, InputEvent};
 
 // ---------------------------------------------------------------------------
@@ -88,6 +88,10 @@ pub enum GestureType {
         direction: SwipeDirection,
         velocity: f64,
     },
+    /// Continuous edge gesture — emitted on every phase (Start/Update/End/Cancel).
+    /// Currently used for top-edge gestures (quick-settings pull-down); other
+    /// edges still use the single-shot `EdgeSwipe` variant.
+    ContinuousEdge(EdgeGesture),
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +119,15 @@ pub struct Recognizer {
     start_time: Option<Instant>,
     /// Last tap info for double-tap detection: (time, position, finger_count).
     last_tap: Option<(Instant, (i32, i32), u8)>,
+    /// Whether we are actively tracking a continuous (top-edge) gesture.
+    /// Set on FingerDown in the top edge zone, cleared on FingerUp or cancel.
+    tracking_continuous_edge: bool,
+    /// The slot being tracked for the continuous edge gesture.
+    continuous_edge_slot: usize,
+    /// Previous move timestamp for instantaneous velocity calculation.
+    last_move_time: Option<Instant>,
+    /// Previous y position for instantaneous velocity calculation.
+    last_move_y: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,31 +146,66 @@ impl Recognizer {
             start_edge: None,
             start_time: None,
             last_tap: None,
+            tracking_continuous_edge: false,
+            continuous_edge_slot: 0,
+            last_move_time: None,
+            last_move_y: None,
         }
     }
 
-    /// Feed an input event. Returns `Some(gesture)` when recognition completes.
-    pub fn on_event(&mut self, event: &InputEvent) -> Option<GestureType> {
+    /// Feed an input event. Returns a list of recognized gestures.
+    ///
+    /// Most events produce zero or one gesture. Top-edge continuous gestures
+    /// emit `ContinuousEdge` events on down, move, and up. All other edges
+    /// still produce a single `EdgeSwipe` at finger-up.
+    pub fn on_event(&mut self, event: &InputEvent) -> Vec<GestureType> {
         match event {
             InputEvent::FingerDown { slot, x, y, time } => self.handle_down(*slot, *x, *y, *time),
-            InputEvent::FingerMove { slot, x, y, .. } => {
-                self.handle_move(*slot, *x, *y);
-                None
-            }
+            InputEvent::FingerMove { slot, x, y, time } => self.handle_move(*slot, *x, *y, *time),
             InputEvent::FingerUp { slot, time } => self.handle_up(*slot, *time),
         }
     }
 
-    fn handle_down(&mut self, slot: usize, x: i32, y: i32, time: Instant) -> Option<GestureType> {
+    fn handle_down(&mut self, slot: usize, x: i32, y: i32, time: Instant) -> Vec<GestureType> {
         if slot >= input::MAX_SLOTS {
-            return None;
+            return Vec::new();
         }
+
+        let mut results = Vec::new();
 
         if self.state == RecState::Idle {
             self.start_time = Some(time);
             self.peak_fingers = 0;
             self.start_edge = classify_edge(x, y, &self.config.edge);
             self.state = RecState::Detecting;
+
+            // Start continuous tracking for top-edge gestures.
+            if self.start_edge == Some(Edge::Top) {
+                self.tracking_continuous_edge = true;
+                self.continuous_edge_slot = slot;
+                self.last_move_time = Some(time);
+                self.last_move_y = Some(y);
+                results.push(GestureType::ContinuousEdge(EdgeGesture::new(
+                    Edge::Top,
+                    GesturePhase::Start,
+                    0.0,
+                    0.0,
+                )));
+            }
+        } else if self.tracking_continuous_edge {
+            // Another finger joined while tracking a continuous edge gesture.
+            // Cancel the continuous edge gesture.
+            let track = self.fingers[self.continuous_edge_slot].as_ref();
+            let progress = track.map_or(0.0, |t| self.compute_top_progress(t));
+            self.tracking_continuous_edge = false;
+            self.last_move_time = None;
+            self.last_move_y = None;
+            results.push(GestureType::ContinuousEdge(EdgeGesture::new(
+                Edge::Top,
+                GesturePhase::Cancel,
+                progress,
+                0.0,
+            )));
         }
 
         self.fingers[slot] = Some(FingerTrack {
@@ -170,45 +218,90 @@ impl Recognizer {
             self.peak_fingers = count;
         }
 
-        None
+        results
     }
 
-    fn handle_move(&mut self, slot: usize, x: i32, y: i32) {
+    fn handle_move(&mut self, slot: usize, x: i32, y: i32, time: Instant) -> Vec<GestureType> {
         if slot >= input::MAX_SLOTS {
-            return;
+            return Vec::new();
         }
         if let Some(ref mut ft) = self.fingers[slot] {
             ft.current = (x, y);
         }
+
+        // Emit continuous Update for top-edge gesture tracking.
+        if self.tracking_continuous_edge && slot == self.continuous_edge_slot {
+            if let Some(ref track) = self.fingers[slot] {
+                let progress = self.compute_top_progress(track);
+                let velocity = self.compute_instantaneous_velocity(y, time);
+                self.last_move_time = Some(time);
+                self.last_move_y = Some(y);
+                return vec![GestureType::ContinuousEdge(EdgeGesture::new(
+                    Edge::Top,
+                    GesturePhase::Update,
+                    progress,
+                    velocity,
+                ))];
+            }
+        }
+
+        Vec::new()
     }
 
-    fn handle_up(&mut self, slot: usize, time: Instant) -> Option<GestureType> {
+    fn handle_up(&mut self, slot: usize, time: Instant) -> Vec<GestureType> {
         if slot >= input::MAX_SLOTS {
-            return None;
+            return Vec::new();
+        }
+
+        let mut results = Vec::new();
+
+        // If the continuous-edge slot is lifting, emit End.
+        if self.tracking_continuous_edge && slot == self.continuous_edge_slot {
+            let track = self.fingers[slot].as_ref();
+            let progress = track.map_or(0.0, |t| self.compute_top_progress(t));
+            let velocity = self.last_move_y.map_or(0.0, |prev_y| {
+                self.compute_instantaneous_velocity(
+                    track.map_or(prev_y, |t| t.current.1),
+                    time,
+                )
+            });
+            self.tracking_continuous_edge = false;
+            self.last_move_time = None;
+            self.last_move_y = None;
+            results.push(GestureType::ContinuousEdge(EdgeGesture::new(
+                Edge::Top,
+                GesturePhase::End,
+                progress,
+                velocity,
+            )));
         }
 
         // Capture end position before clearing.
         let end_track = self.fingers[slot].clone();
         self.fingers[slot] = None;
 
-        // Only classify when all fingers are up.
+        // Only classify the final gesture when all fingers are up.
         if self.active_count() > 0 {
-            return None;
+            return results;
         }
 
         if self.state != RecState::Detecting {
-            return None;
+            return results;
         }
 
         self.state = RecState::Idle;
 
-        let start_time = self.start_time.take()?;
+        let Some(start_time) = self.start_time.take() else {
+            return results;
+        };
         let duration = time.duration_since(start_time);
         let fingers = self.peak_fingers;
 
         // Use the last-downed finger's track for primary movement analysis.
         // For single-finger gestures this is the only finger.
-        let track = end_track?;
+        let Some(track) = end_track else {
+            return results;
+        };
         let (sx, sy) = track.start;
         let (ex, ey) = track.current;
         let dx = (ex - sx) as f64;
@@ -216,19 +309,22 @@ impl Recognizer {
         let distance = (dx * dx + dy * dy).sqrt();
 
         // --- Edge swipe ---
+        // For top edge the continuous gesture path already emitted End above,
+        // so we skip the legacy EdgeSwipe for top edge.
         if let Some(edge) = self.start_edge.take() {
-            if distance >= self.config.swipe_min_distance {
+            if edge != Edge::Top && distance >= self.config.swipe_min_distance {
                 let direction = dominant_direction(dx, dy);
                 let dt = duration.as_secs_f64().max(0.001);
                 let velocity = distance / dt;
-                return Some(GestureType::EdgeSwipe {
+                results.push(GestureType::EdgeSwipe {
                     edge,
                     direction,
                     velocity,
                 });
+                return results;
             }
-            // If not enough movement, fall through to normal gesture detection
-            // (reset start_edge already taken).
+            // Top edge or not enough movement — fall through to normal
+            // gesture detection (start_edge already taken).
         }
 
         // --- Pinch (2+ fingers) ---
@@ -246,11 +342,12 @@ impl Recognizer {
             let dt = duration.as_secs_f64().max(0.001);
             let velocity = distance / dt;
             self.last_tap = None; // swipe cancels pending double-tap
-            return Some(GestureType::Swipe {
+            results.push(GestureType::Swipe {
                 fingers,
                 direction,
                 velocity,
             });
+            return results;
         }
 
         // --- Long press ---
@@ -259,10 +356,11 @@ impl Recognizer {
         {
             self.last_tap = None;
             let pos = (sx, sy);
-            return Some(GestureType::LongPress {
+            results.push(GestureType::LongPress {
                 fingers,
                 position: pos,
             });
+            return results;
         }
 
         // --- Tap / Double-tap ---
@@ -274,22 +372,24 @@ impl Recognizer {
                 if time.duration_since(last_time) <= self.config.double_tap_max_gap
                     && last_fingers == fingers
                 {
-                    return Some(GestureType::DoubleTap {
+                    results.push(GestureType::DoubleTap {
                         fingers,
                         position: pos,
                     });
+                    return results;
                 }
             }
 
             // Record this tap for potential double-tap on the next touch.
             self.last_tap = Some((time, pos, fingers));
-            return Some(GestureType::Tap {
+            results.push(GestureType::Tap {
                 fingers,
                 position: pos,
             });
+            return results;
         }
 
-        None
+        results
     }
 
     fn active_count(&self) -> usize {
@@ -297,12 +397,58 @@ impl Recognizer {
     }
 
     /// Force the recognizer back to idle, discarding any in-progress gesture.
-    pub fn cancel(&mut self) {
+    ///
+    /// If a continuous edge gesture was in progress, returns a Cancel event.
+    /// Otherwise returns an empty vec.
+    pub fn cancel(&mut self) -> Vec<GestureType> {
+        let mut results = Vec::new();
+        if self.tracking_continuous_edge {
+            let track = self.fingers[self.continuous_edge_slot].as_ref();
+            let progress = track.map_or(0.0, |t| self.compute_top_progress(t));
+            results.push(GestureType::ContinuousEdge(EdgeGesture::new(
+                Edge::Top,
+                GesturePhase::Cancel,
+                progress,
+                0.0,
+            )));
+        }
         self.state = RecState::Idle;
         self.fingers = std::array::from_fn(|_| None);
         self.peak_fingers = 0;
         self.start_edge = None;
         self.start_time = None;
+        self.tracking_continuous_edge = false;
+        self.last_move_time = None;
+        self.last_move_y = None;
+        results
+    }
+
+    /// Compute progress (0.0..1.0) for a top-edge gesture based on how far
+    /// the finger has traveled from its start position relative to screen height.
+    fn compute_top_progress(&self, track: &FingerTrack) -> f64 {
+        let travel = (track.current.1 - track.start.1).abs() as f64;
+        let screen_height = self.config.edge.screen_height as f64;
+        if screen_height <= 0.0 {
+            return 0.0;
+        }
+        (travel / screen_height).clamp(0.0, 1.0)
+    }
+
+    /// Compute instantaneous velocity (pixels/sec) from the previous position
+    /// to the current y position.
+    fn compute_instantaneous_velocity(&self, current_y: i32, now: Instant) -> f64 {
+        let Some(prev_time) = self.last_move_time else {
+            return 0.0;
+        };
+        let Some(prev_y) = self.last_move_y else {
+            return 0.0;
+        };
+        let dt = now.duration_since(prev_time).as_secs_f64();
+        if dt <= 0.0 {
+            return 0.0;
+        }
+        let dy = (current_y - prev_y).abs() as f64;
+        dy / dt
     }
 }
 
@@ -377,6 +523,20 @@ mod tests {
         )
     }
 
+    /// Extract the last non-ContinuousEdge gesture from a Vec, if any.
+    /// Useful for tests that only care about the final classification.
+    fn last_final_gesture(results: &[GestureType]) -> Option<&GestureType> {
+        results
+            .iter()
+            .rev()
+            .find(|g| !matches!(g, GestureType::ContinuousEdge(_)))
+    }
+
+    /// Check whether results contain any final (non-ContinuousEdge) gesture.
+    fn has_final_gesture(results: &[GestureType]) -> bool {
+        last_final_gesture(results).is_some()
+    }
+
     // ---- Tap ----
 
     #[test]
@@ -384,17 +544,18 @@ mod tests {
         let mut r = default_recognizer();
         let now = Instant::now();
         let (down, up) = tap_events(0, 500, 500, now);
-        assert!(r.on_event(&down).is_none());
+        assert!(!has_final_gesture(&r.on_event(&down)));
         let result = r.on_event(&up);
+        let gesture = last_final_gesture(&result);
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::Tap {
                     fingers: 1,
                     position: (500, 500)
                 })
             ),
-            "expected Tap, got {result:?}"
+            "expected Tap, got {gesture:?}"
         );
     }
 
@@ -409,16 +570,17 @@ mod tests {
         let (d1, u1) = tap_events(0, 500, 500, now);
         r.on_event(&d1);
         let first = r.on_event(&u1);
-        assert!(matches!(first, Some(GestureType::Tap { .. })));
+        assert!(matches!(last_final_gesture(&first), Some(GestureType::Tap { .. })));
 
         // Second tap within 300ms gap.
         let t2 = now + Duration::from_millis(200);
         let (d2, u2) = tap_events(0, 502, 498, t2);
         r.on_event(&d2);
         let second = r.on_event(&u2);
+        let gesture = last_final_gesture(&second);
         assert!(
-            matches!(second, Some(GestureType::DoubleTap { fingers: 1, .. })),
-            "expected DoubleTap, got {second:?}"
+            matches!(gesture, Some(GestureType::DoubleTap { fingers: 1, .. })),
+            "expected DoubleTap, got {gesture:?}"
         );
     }
 
@@ -436,10 +598,11 @@ mod tests {
         let (d2, u2) = tap_events(0, 500, 500, t2);
         r.on_event(&d2);
         let result = r.on_event(&u2);
+        let gesture = last_final_gesture(&result);
         // Should be a plain Tap, not DoubleTap.
         assert!(
-            matches!(result, Some(GestureType::Tap { .. })),
-            "expected Tap, got {result:?}"
+            matches!(gesture, Some(GestureType::Tap { .. })),
+            "expected Tap, got {gesture:?}"
         );
     }
 
@@ -462,16 +625,17 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(600),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::LongPress {
                     fingers: 1,
                     position: (500, 500),
                 })
             ),
-            "expected LongPress, got {result:?}"
+            "expected LongPress, got {gesture:?}"
         );
     }
 
@@ -497,12 +661,13 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(600),
         });
+        let gesture = last_final_gesture(&result);
 
         // 50px movement exceeds long_press_max_movement AND swipe_min_distance,
         // so this should be a Swipe.
         assert!(
-            matches!(result, Some(GestureType::Swipe { .. })),
-            "expected Swipe (not LongPress), got {result:?}"
+            matches!(gesture, Some(GestureType::Swipe { .. })),
+            "expected Swipe (not LongPress), got {gesture:?}"
         );
     }
 
@@ -529,17 +694,18 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::Swipe {
                     fingers: 1,
                     direction: SwipeDirection::Right,
                     velocity,
-                }) if velocity > 0.0
+                }) if *velocity > 0.0
             ),
-            "expected Swipe(Right) with 1 finger and positive velocity, got {result:?}"
+            "expected Swipe(Right) with 1 finger and positive velocity, got {gesture:?}"
         );
     }
 
@@ -564,16 +730,17 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::Swipe {
                     direction: SwipeDirection::Up,
                     ..
                 })
             ),
-            "expected Swipe(Up), got {result:?}"
+            "expected Swipe(Up), got {gesture:?}"
         );
     }
 
@@ -598,16 +765,17 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::Swipe {
                     direction: SwipeDirection::Left,
                     ..
                 })
             ),
-            "expected Swipe(Left), got {result:?}"
+            "expected Swipe(Left), got {gesture:?}"
         );
     }
 
@@ -632,16 +800,17 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::Swipe {
                     direction: SwipeDirection::Down,
                     ..
                 })
             ),
-            "expected Swipe(Down), got {result:?}"
+            "expected Swipe(Down), got {gesture:?}"
         );
     }
 
@@ -678,29 +847,28 @@ mod tests {
             y: 505,
             time: now + Duration::from_millis(100),
         });
-        // First finger up — no result yet.
-        assert!(r
-            .on_event(&InputEvent::FingerUp {
-                slot: 0,
-                time: now + Duration::from_millis(150),
-            })
-            .is_none());
+        // First finger up — no final gesture yet.
+        assert!(!has_final_gesture(&r.on_event(&InputEvent::FingerUp {
+            slot: 0,
+            time: now + Duration::from_millis(150),
+        })));
         // Second finger up — now we classify.
         let result = r.on_event(&InputEvent::FingerUp {
             slot: 1,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::Swipe {
                     fingers: 2,
                     direction: SwipeDirection::Right,
                     ..
                 })
             ),
-            "expected 2-finger Swipe(Right), got {result:?}"
+            "expected 2-finger Swipe(Right), got {gesture:?}"
         );
     }
 
@@ -725,31 +893,30 @@ mod tests {
                 time: now + Duration::from_millis(100),
             });
         }
-        // Lift first two — no result.
+        // Lift first two — no final gesture.
         for slot in 0..2 {
-            assert!(r
-                .on_event(&InputEvent::FingerUp {
-                    slot,
-                    time: now + Duration::from_millis(150),
-                })
-                .is_none());
+            assert!(!has_final_gesture(&r.on_event(&InputEvent::FingerUp {
+                slot,
+                time: now + Duration::from_millis(150),
+            })));
         }
         // Lift last finger.
         let result = r.on_event(&InputEvent::FingerUp {
             slot: 2,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::Swipe {
                     fingers: 3,
                     direction: SwipeDirection::Up,
                     ..
                 })
             ),
-            "expected 3-finger Swipe(Up), got {result:?}"
+            "expected 3-finger Swipe(Up), got {gesture:?}"
         );
     }
 
@@ -777,17 +944,18 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::EdgeSwipe {
                     edge: Edge::Left,
                     direction: SwipeDirection::Right,
                     velocity,
-                }) if velocity > 0.0
+                }) if *velocity > 0.0
             ),
-            "expected EdgeSwipe(Left, Right) with positive velocity, got {result:?}"
+            "expected EdgeSwipe(Left, Right) with positive velocity, got {gesture:?}"
         );
     }
 
@@ -813,17 +981,18 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(150),
         });
+        let gesture = last_final_gesture(&result);
 
         assert!(
             matches!(
-                result,
+                gesture,
                 Some(GestureType::EdgeSwipe {
                     edge: Edge::Bottom,
                     direction: SwipeDirection::Up,
                     ..
                 })
             ),
-            "expected EdgeSwipe(Bottom, Up), got {result:?}"
+            "expected EdgeSwipe(Bottom, Up), got {gesture:?}"
         );
     }
 
@@ -848,8 +1017,8 @@ mod tests {
             time: now + Duration::from_millis(50),
         });
         assert!(
-            result.is_none(),
-            "expected None after cancel, got {result:?}"
+            result.is_empty(),
+            "expected empty after cancel, got {result:?}"
         );
     }
 
@@ -876,10 +1045,10 @@ mod tests {
             time: now + Duration::from_millis(100),
         });
 
-        // 100ms > 50ms threshold → not a tap, and not long enough for long press.
+        // 100ms > 50ms threshold -> not a tap, and not long enough for long press.
         assert!(
-            result.is_none(),
-            "expected None with strict tap threshold, got {result:?}"
+            !has_final_gesture(&result),
+            "expected no final gesture with strict tap threshold, got {result:?}"
         );
     }
 
@@ -909,11 +1078,12 @@ mod tests {
             slot: 0,
             time: now + Duration::from_millis(120),
         });
+        let gesture = last_final_gesture(&result);
 
-        // 60px < 100px threshold → not a swipe.
+        // 60px < 100px threshold -> not a swipe.
         assert!(
-            !matches!(result, Some(GestureType::Swipe { .. })),
-            "should not be a swipe with 100px threshold, got {result:?}"
+            !matches!(gesture, Some(GestureType::Swipe { .. })),
+            "should not be a swipe with 100px threshold, got {gesture:?}"
         );
     }
 
@@ -940,5 +1110,265 @@ mod tests {
     #[test]
     fn inter_finger_distance_single_point() {
         assert_eq!(inter_finger_distance(&[(100, 200)]), 0.0);
+    }
+
+    // ---- Continuous edge gesture tests ----
+
+    #[test]
+    fn top_edge_emits_start_on_finger_down() {
+        let mut r = default_recognizer();
+        let now = Instant::now();
+
+        // Touch down in top edge zone (y=10, within 50px edge zone).
+        let result = r.on_event(&InputEvent::FingerDown {
+            slot: 0,
+            x: 640,
+            y: 10,
+            time: now,
+        });
+
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            GestureType::ContinuousEdge(eg) => {
+                assert_eq!(eg.edge, Edge::Top);
+                assert_eq!(eg.phase, GesturePhase::Start);
+                assert!(eg.progress.abs() < f64::EPSILON);
+                assert!(eg.velocity.abs() < f64::EPSILON);
+            }
+            other => panic!("expected ContinuousEdge(Start), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn top_edge_emits_updates_on_move() {
+        let mut r = default_recognizer();
+        let now = Instant::now();
+
+        // Touch down in top edge zone.
+        r.on_event(&InputEvent::FingerDown {
+            slot: 0,
+            x: 640,
+            y: 10,
+            time: now,
+        });
+
+        // Move downward (into the screen).
+        let result = r.on_event(&InputEvent::FingerMove {
+            slot: 0,
+            x: 640,
+            y: 200,
+            time: now + Duration::from_millis(100),
+        });
+
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            GestureType::ContinuousEdge(eg) => {
+                assert_eq!(eg.edge, Edge::Top);
+                assert_eq!(eg.phase, GesturePhase::Update);
+                // Travel = |200 - 10| = 190, screen_height = 1600.
+                let expected_progress = 190.0 / 1600.0;
+                assert!(
+                    (eg.progress - expected_progress).abs() < 0.01,
+                    "expected progress ~{expected_progress}, got {}",
+                    eg.progress
+                );
+                assert!(eg.velocity > 0.0, "expected positive velocity");
+            }
+            other => panic!("expected ContinuousEdge(Update), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn top_edge_emits_end_on_finger_up() {
+        let mut r = default_recognizer();
+        let now = Instant::now();
+
+        r.on_event(&InputEvent::FingerDown {
+            slot: 0,
+            x: 640,
+            y: 10,
+            time: now,
+        });
+        r.on_event(&InputEvent::FingerMove {
+            slot: 0,
+            x: 640,
+            y: 200,
+            time: now + Duration::from_millis(100),
+        });
+
+        let result = r.on_event(&InputEvent::FingerUp {
+            slot: 0,
+            time: now + Duration::from_millis(150),
+        });
+
+        // Should contain a ContinuousEdge(End).
+        let end_events: Vec<_> = result
+            .iter()
+            .filter(|g| matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::End))
+            .collect();
+        assert_eq!(
+            end_events.len(),
+            1,
+            "expected exactly one End event, got {result:?}"
+        );
+        match end_events[0] {
+            GestureType::ContinuousEdge(eg) => {
+                assert_eq!(eg.edge, Edge::Top);
+                assert!(eg.progress > 0.0);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn top_edge_cancelled_when_second_finger_joins() {
+        let mut r = default_recognizer();
+        let now = Instant::now();
+
+        // First finger in top edge zone.
+        r.on_event(&InputEvent::FingerDown {
+            slot: 0,
+            x: 640,
+            y: 10,
+            time: now,
+        });
+
+        // Second finger joins.
+        let result = r.on_event(&InputEvent::FingerDown {
+            slot: 1,
+            x: 800,
+            y: 500,
+            time: now + Duration::from_millis(50),
+        });
+
+        let cancel_events: Vec<_> = result
+            .iter()
+            .filter(|g| {
+                matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::Cancel)
+            })
+            .collect();
+        assert_eq!(
+            cancel_events.len(),
+            1,
+            "expected Cancel when second finger joins, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn top_edge_cancel_on_recognizer_cancel() {
+        let mut r = default_recognizer();
+        let now = Instant::now();
+
+        r.on_event(&InputEvent::FingerDown {
+            slot: 0,
+            x: 640,
+            y: 10,
+            time: now,
+        });
+
+        let result = r.cancel();
+        let cancel_events: Vec<_> = result
+            .iter()
+            .filter(|g| {
+                matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::Cancel)
+            })
+            .collect();
+        assert_eq!(
+            cancel_events.len(),
+            1,
+            "expected Cancel on recognizer.cancel(), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn non_top_edge_does_not_emit_continuous() {
+        let mut r = default_recognizer();
+        let now = Instant::now();
+
+        // Left edge touch — should NOT emit ContinuousEdge.
+        let result = r.on_event(&InputEvent::FingerDown {
+            slot: 0,
+            x: 10,
+            y: 500,
+            time: now,
+        });
+        assert!(
+            result.is_empty(),
+            "left edge should not emit continuous events, got {result:?}"
+        );
+
+        let result = r.on_event(&InputEvent::FingerMove {
+            slot: 0,
+            x: 200,
+            y: 505,
+            time: now + Duration::from_millis(100),
+        });
+        assert!(
+            !result.iter().any(|g| matches!(g, GestureType::ContinuousEdge(_))),
+            "left edge move should not emit continuous events, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn top_edge_full_lifecycle() {
+        let mut r = default_recognizer();
+        let now = Instant::now();
+
+        // Start.
+        let start = r.on_event(&InputEvent::FingerDown {
+            slot: 0,
+            x: 640,
+            y: 5,
+            time: now,
+        });
+        assert_eq!(start.len(), 1);
+        assert!(matches!(
+            &start[0],
+            GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::Start
+        ));
+
+        // Update 1.
+        let u1 = r.on_event(&InputEvent::FingerMove {
+            slot: 0,
+            x: 640,
+            y: 100,
+            time: now + Duration::from_millis(50),
+        });
+        assert_eq!(u1.len(), 1);
+        assert!(matches!(
+            &u1[0],
+            GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::Update
+        ));
+
+        // Update 2 — further down.
+        let u2 = r.on_event(&InputEvent::FingerMove {
+            slot: 0,
+            x: 640,
+            y: 400,
+            time: now + Duration::from_millis(100),
+        });
+        assert_eq!(u2.len(), 1);
+        if let GestureType::ContinuousEdge(eg2) = &u2[0] {
+            assert!(eg2.progress > 0.0);
+            // Progress should increase with more travel.
+            if let GestureType::ContinuousEdge(eg1) = &u1[0] {
+                assert!(
+                    eg2.progress > eg1.progress,
+                    "progress should increase: {} > {}",
+                    eg2.progress,
+                    eg1.progress
+                );
+            }
+        }
+
+        // End.
+        let end = r.on_event(&InputEvent::FingerUp {
+            slot: 0,
+            time: now + Duration::from_millis(150),
+        });
+        assert!(
+            end.iter().any(|g| matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::End)),
+            "expected End in results, got {end:?}"
+        );
     }
 }

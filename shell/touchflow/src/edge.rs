@@ -13,6 +13,71 @@ pub enum Edge {
     Right,
 }
 
+impl Edge {
+    /// String label for D-Bus serialization.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Edge::Top => "top",
+            Edge::Bottom => "bottom",
+            Edge::Left => "left",
+            Edge::Right => "right",
+        }
+    }
+}
+
+/// Phase of a continuous edge gesture lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GesturePhase {
+    /// Finger touched down in an edge zone.
+    Start,
+    /// Finger moved while tracking an edge gesture.
+    Update,
+    /// Finger lifted — gesture complete.
+    End,
+    /// Gesture was cancelled (e.g. another finger joined).
+    Cancel,
+}
+
+impl GesturePhase {
+    /// String label for D-Bus serialization.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GesturePhase::Start => "start",
+            GesturePhase::Update => "update",
+            GesturePhase::End => "end",
+            GesturePhase::Cancel => "cancel",
+        }
+    }
+}
+
+/// A continuous edge gesture event emitted during each phase of a top-edge
+/// swipe. Other edges still use the single-shot `EdgeSwipe` path; only the
+/// top edge emits continuous updates so the quick-settings panel can track
+/// finger position in real time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeGesture {
+    /// Which screen edge the gesture started from.
+    pub edge: Edge,
+    /// Current lifecycle phase.
+    pub phase: GesturePhase,
+    /// Normalized travel: 0.0 at the edge, 1.0 at full screen height.
+    pub progress: f64,
+    /// Instantaneous velocity in pixels/second.
+    pub velocity: f64,
+}
+
+impl EdgeGesture {
+    /// Create a new edge gesture event.
+    pub fn new(edge: Edge, phase: GesturePhase, progress: f64, velocity: f64) -> Self {
+        Self {
+            edge,
+            phase,
+            progress: progress.clamp(0.0, 1.0),
+            velocity,
+        }
+    }
+}
+
 /// Configuration for edge zone detection.
 #[derive(Debug, Clone)]
 pub struct EdgeConfig {
@@ -160,5 +225,62 @@ mod tests {
         assert_eq!(classify_edge(50, 600, &cfg), None);
         // One pixel inside
         assert_eq!(classify_edge(49, 600, &cfg), Some(Edge::Left));
+    }
+
+    // ---- Edge string labels ----
+
+    #[test]
+    fn edge_as_str() {
+        assert_eq!(Edge::Top.as_str(), "top");
+        assert_eq!(Edge::Bottom.as_str(), "bottom");
+        assert_eq!(Edge::Left.as_str(), "left");
+        assert_eq!(Edge::Right.as_str(), "right");
+    }
+
+    // ---- GesturePhase ----
+
+    #[test]
+    fn gesture_phase_as_str() {
+        assert_eq!(GesturePhase::Start.as_str(), "start");
+        assert_eq!(GesturePhase::Update.as_str(), "update");
+        assert_eq!(GesturePhase::End.as_str(), "end");
+        assert_eq!(GesturePhase::Cancel.as_str(), "cancel");
+    }
+
+    // ---- EdgeGesture ----
+
+    #[test]
+    fn edge_gesture_constructor_clamps_progress() {
+        let g = EdgeGesture::new(Edge::Top, GesturePhase::Update, 1.5, 100.0);
+        assert!((g.progress - 1.0).abs() < f64::EPSILON);
+
+        let g = EdgeGesture::new(Edge::Top, GesturePhase::Update, -0.3, 0.0);
+        assert!(g.progress.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn edge_gesture_constructor_preserves_valid_progress() {
+        let g = EdgeGesture::new(Edge::Top, GesturePhase::Start, 0.0, 0.0);
+        assert!(g.progress.abs() < f64::EPSILON);
+        assert!(g.velocity.abs() < f64::EPSILON);
+        assert_eq!(g.edge, Edge::Top);
+        assert_eq!(g.phase, GesturePhase::Start);
+
+        let g = EdgeGesture::new(Edge::Bottom, GesturePhase::End, 0.75, 500.0);
+        assert!((g.progress - 0.75).abs() < f64::EPSILON);
+        assert!((g.velocity - 500.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn edge_gesture_phases_round_trip() {
+        for phase in [
+            GesturePhase::Start,
+            GesturePhase::Update,
+            GesturePhase::End,
+            GesturePhase::Cancel,
+        ] {
+            let g = EdgeGesture::new(Edge::Left, phase, 0.5, 200.0);
+            assert_eq!(g.phase, phase);
+        }
     }
 }

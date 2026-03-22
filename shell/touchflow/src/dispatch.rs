@@ -7,7 +7,7 @@ use anyhow::Result;
 use tracing::debug;
 
 use crate::config::TouchFlowConfig;
-use crate::edge::Edge;
+use crate::edge::{Edge, EdgeGesture};
 use crate::gesture::{GestureType, SwipeDirection};
 
 // ---------------------------------------------------------------------------
@@ -39,6 +39,13 @@ pub trait EmitterDispatch {
     async fn hide_launcher(&self) -> Result<()>;
     async fn show_claw(&self) -> Result<()>;
     async fn hide_claw(&self) -> Result<()>;
+    async fn emit_edge_gesture(
+        &self,
+        edge: &str,
+        phase: &str,
+        progress: f64,
+        velocity: f64,
+    ) -> Result<()>;
 }
 
 // Blanket impls for the production types.
@@ -91,6 +98,16 @@ impl EmitterDispatch for crate::dbus_emitter::TouchFlowEmitter {
     }
     async fn hide_claw(&self) -> Result<()> {
         self.hide_claw().await
+    }
+    async fn emit_edge_gesture(
+        &self,
+        edge: &str,
+        phase: &str,
+        progress: f64,
+        velocity: f64,
+    ) -> Result<()> {
+        self.emit_edge_gesture(edge, phase, progress, velocity)
+            .await
     }
 }
 
@@ -241,6 +258,30 @@ pub async fn dispatch_gesture<N: NiriDispatch, E: EmitterDispatch>(
             Ok(DispatchResult::Dispatched)
         }
 
+        // ---- Continuous edge gesture ----
+        GestureType::ContinuousEdge(EdgeGesture {
+            edge,
+            phase,
+            progress,
+            velocity,
+        }) => {
+            if !config.gestures.edge_swipe_enabled {
+                debug!("continuous edge gesture disabled — passthrough");
+                return Ok(DispatchResult::Passthrough);
+            }
+            debug!(
+                edge = edge.as_str(),
+                phase = phase.as_str(),
+                progress,
+                velocity,
+                "continuous edge gesture"
+            );
+            let _ = emitter
+                .emit_edge_gesture(edge.as_str(), phase.as_str(), *progress, *velocity)
+                .await;
+            Ok(DispatchResult::Dispatched)
+        }
+
         // ---- Anything else: passthrough ----
         other => {
             debug!(?other, "unhandled gesture — passthrough");
@@ -353,6 +394,16 @@ mod tests {
         }
         async fn hide_claw(&self) -> Result<()> {
             self.hide_claw().await
+        }
+        async fn emit_edge_gesture(
+            &self,
+            edge: &str,
+            phase: &str,
+            progress: f64,
+            velocity: f64,
+        ) -> Result<()> {
+            self.emit_edge_gesture(edge, phase, progress, velocity)
+                .await
         }
     }
 
