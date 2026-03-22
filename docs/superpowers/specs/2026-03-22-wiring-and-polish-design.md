@@ -21,7 +21,7 @@ Replace stub implementations in `slate-common::system` with real D-Bus/sysfs cal
 | Brightness get/set | sysfs | filesystem | `/sys/class/backlight/*/brightness` and `max_brightness` |
 | Battery | UPower | `org.freedesktop.UPower` on system bus | Properties on `/org/freedesktop/UPower/devices/battery_BAT0` |
 | AC power | UPower | same | Property `OnBattery` on `/org/freedesktop/UPower` |
-| Connectivity | NetworkManager | same as WiFi | Property `Connectivity` (enum: 1=none, 4=full) |
+| Connectivity | NetworkManager | same as WiFi | Property `Connectivity` (enum: 0=unknown, 1=none, 2=portal, 3=limited, 4=full). Return `true` if >= 3. |
 | DND toggle | slate-notifyd | `org.slate.Notifications` on session bus | Property `dnd` (bool, already implemented) |
 
 ### Architecture
@@ -128,17 +128,25 @@ Message::QsAction(QsAction::BrightnessChanged(val)) => {
 // etc.
 ```
 
-Add `system_conn: Arc<SystemConnection>` to `SlateShade` app state, created at startup.
+Add `Message::SystemResult(Result<(), String>)` variant. The handler logs errors via `tracing::warn` and does nothing else — tiles update optimistically when toggled (the UI flips immediately, then the D-Bus call fires in the background). If the call fails, log the error but don't revert the toggle (avoids flickering).
+
+Add `system_conn: Arc<SystemConnection>` to `SlateShade` app state, created at startup. `SystemConnection` is `Clone` (wraps two `zbus::Connection` which are `Clone + Send + Sync`).
+
+### Debouncing for sliders
+
+`BrightnessChanged` and `VolumeChanged` fire on every drag frame. Debounce by tracking `last_brightness_write: Instant` and `last_volume_write: Instant` in app state. Only dispatch the actual write if >= 100ms since the last write. Always update the local slider position immediately for smooth UI.
 
 ### What stays stubbed
 
 - AirplaneMode, AutoRotate, FlashLight, NightLight, Hotspot — these need device-specific sysfs paths that vary per hardware. They stay as local-only toggles for now. Mark tiles as `available: false` unless running on a known device.
 
-### Testing
+### Testing and migration
 
-- Each `SystemConnection` method gets a unit test that exercises error handling (D-Bus not available → graceful fallback)
-- Integration tests require actual D-Bus services, so they're `#[ignore]` tagged
-- `wpctl` and sysfs functions tested with mock output parsing
+- Delete existing stub tests (they test `Ok(false)` which is no longer the behavior).
+- Each `SystemConnection` method gets a unit test that exercises error handling (D-Bus not available → graceful fallback).
+- Integration tests require actual D-Bus services, so they're `#[ignore]` tagged.
+- `wpctl` output parsing tested with canned strings (e.g., `parse_wpctl_volume("Volume: 0.50 [MUTED]") == 0.5`).
+- sysfs brightness parsing tested with mock file content.
 
 ---
 
@@ -149,14 +157,17 @@ Add `system_conn: Arc<SystemConnection>` to `SlateShade` app state, created at s
 **Problem:** The freedesktop `Notify` method receives `expire_timeout` (in ms) but it's currently ignored (parameter named `_expire_timeout`).
 
 **Design:**
-1. Add `expire_timeout_ms: i32` field to `Notification` struct in `slate-common::notifications`. Values: `-1` = server default, `0` = never expire, `>0` = dismiss after N milliseconds.
-2. In `slate-notifyd/src/dbus/freedesktop.rs`, store the value instead of ignoring it.
-3. In `slate-notifyd/src/main.rs`, add an expiry ticker task (runs every 1 second):
-   - Iterate active notifications
-   - If `expire_timeout_ms > 0` and `(now - timestamp) > expire_timeout_ms`, auto-dismiss
-   - If `expire_timeout_ms == -1`, use `heads_up_duration_secs * 1000` from settings
-   - Emit `Dismissed` + `NotificationClosed(reason=1)` signals for expired notifications
+1. Add `expire_timeout_ms: i32` field to `Notification` struct in `slate-common::notifications`. Values: `-1` = server default, `0` = never expire, `>0` = dismiss after N milliseconds. Mark with `#[serde(default = "default_expire_timeout")]` where the default returns `-1`, so existing persisted/history notifications deserialize correctly.
+2. In `slate-notifyd/src/dbus/freedesktop.rs`, store the `expire_timeout` parameter (currently `_expire_timeout`) into the notification.
+3. In `slate-notifyd/src/main.rs`, add an expiry ticker task (runs every 1 second). This task takes an `Arc<RwLock<NotificationStore>>` and a `zbus::Connection`:
+   - Acquire read lock, collect UUIDs + app_names of expired notifications
+   - Drop read lock
+   - Acquire write lock, dismiss each expired notification via `store.dismiss()`
+   - Drop write lock
+   - Emit `NotificationClosed(fd_id, reason=1)` on the freedesktop path and `Dismissed(uuid)` on the slate path using `SignalEmitter::new(&conn, path)`
+   - Expiry check: if `expire_timeout_ms > 0` and `(now - timestamp) > expire_timeout_ms`; if `expire_timeout_ms == -1`, use `heads_up_duration_secs * 1000` from settings
 4. Persistent notifications (`persistent: true`) are exempt from auto-expiry regardless of timeout.
+5. Add `suppress_sound: bool` field to `Notification` with `#[serde(default)]`. Extract from freedesktop hints `suppress-sound` key in `dbus/mod.rs` alongside existing hint extraction.
 
 ### 2b: Dock Notification Badges
 
@@ -167,7 +178,7 @@ Add `system_conn: Arc<SystemConnection>` to `SlateShade` app state, created at s
 2. Subscribe to `org.slate.Notifications.GroupChanged(app_name, count)` signal via D-Bus in shoal's existing `dbus_listener`.
 3. On signal: update `notification_counts` map. Count of `0` removes the entry.
 4. In `shell/shoal/src/dock.rs`, when rendering each `DockIcon`, check `notification_counts` for a matching `desktop_entry` or `app_name`. If count > 0, render a badge circle (pill shape, accent color, white text).
-5. On startup, call `org.slate.Notifications.GetGroupSummary()` to populate initial counts.
+5. On startup, call `org.slate.Notifications.GetActive()` to get all active notifications, then aggregate counts per `app_name` locally. (The existing `GetGroupSummary(app_name)` method takes a single app_name argument — there is no all-groups variant, so aggregating from `GetActive()` is the correct approach.)
 
 **Matching logic:** The `GroupChanged` signal emits `app_name` (e.g., "firefox"). Desktop entries have an `app_id` (e.g., "org.mozilla.firefox") and a `Name` field. Match by:
 - Exact `app_name == desktop_entry.app_id`
@@ -181,7 +192,7 @@ Add `system_conn: Arc<SystemConnection>` to `SlateShade` app state, created at s
 1. In `slate-notifyd/src/main.rs`, after a new notification is added (in the `Notify` handler):
    - Skip if DND is enabled
    - Skip if urgency is `Low`
-   - Skip if the notification has `suppress-sound` hint
+   - Skip if `notification.suppress_sound` is true (extracted from freedesktop `suppress-sound` hint)
    - Otherwise: spawn `pw-play /usr/share/sounds/freedesktop/stereo/message-new-instant.ogg` subprocess
 2. Use `tokio::process::Command` (fire and forget, log errors).
 3. The sound file path is the freedesktop default. If the file doesn't exist, skip silently.
@@ -209,25 +220,31 @@ Replace direct llama.cpp HTTP calls in `shell/slate-suggest/src/llm.rs` with Rhe
 ### Changes
 
 **`shell/slate-suggest/src/llm.rs`:**
-Replace the entire implementation:
+Replace the entire implementation. The existing tests (`completion_request_serializes`, `completion_response_deserializes`, `completion_response_empty_content`) are deleted — they tested the old HTTP format which no longer exists. New tests verify the D-Bus path and graceful fallback.
+
+The connection is created once per call, which is acceptable because `query_llm` is called at most once per 300ms tick and `zbus::Connection::session()` is cheap (reuses the underlying socket).
+
 ```rust
 pub async fn query_llm(input: &str) -> Option<String> {
     if input.trim().is_empty() { return None; }
     #[cfg(target_os = "linux")]
     {
+        use slate_common::dbus::{RHEA_BUS_NAME, RHEA_PATH, RHEA_INTERFACE};
         let conn = zbus::Connection::session().await.ok()?;
         let proxy = zbus::Proxy::builder(&conn)
-            .destination(slate_common::dbus::RHEA_BUS_NAME)?
-            .path(slate_common::dbus::RHEA_PATH)?
-            .interface(slate_common::dbus::RHEA_INTERFACE)?
+            .destination(RHEA_BUS_NAME).ok()?
+            .path(RHEA_PATH).ok()?
+            .interface(RHEA_INTERFACE).ok()?
             .build().await.ok()?;
 
         let system_prompt = "You are a shell command completion engine. Given a partial command, output ONLY the completed command. No explanation.";
-        let result: Result<String, _> = tokio::time::timeout(
+        let reply = tokio::time::timeout(
             Duration::from_millis(500),
             proxy.call_method("Complete", &(input, system_prompt))
-        ).await.ok()?.map(|r| r.body().deserialize().ok()).flatten();
-        result.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        ).await.ok()?.ok()?;
+        let text: String = reply.body().deserialize().ok()?;
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
     }
     #[cfg(not(target_os = "linux"))]
     { None }
@@ -235,7 +252,7 @@ pub async fn query_llm(input: &str) -> Option<String> {
 ```
 
 **`shell/slate-suggest/Cargo.toml`:**
-- Remove `reqwest` and `serde_json` dependencies
+- Remove `reqwest` and `serde_json` dependencies (only used by the old llm.rs)
 - Add `zbus = { workspace = true }` if not already present
 - Add `slate-common = { path = "../slate-common" }` if not already present
 
@@ -264,8 +281,8 @@ pub async fn query_llm(input: &str) -> Option<String> {
    - **Claude**: API key file path input, model name input
    - **OpenAI**: base URL, API key file path, model name
    - **Ollama**: base URL, model name
-4. Add a status indicator showing Rhea's current state (query `GetStatus()` on page load)
-5. Remove the flag file mechanism — Rhea manages model lifecycle directly
+4. Add a status indicator showing Rhea's current state. Query `org.slate.Rhea.GetStatus()` (which already exists in `shell/rhea/src/dbus.rs` and returns a JSON string with backend/model/status fields) on page load via `Task::perform`.
+5. Remove the flag file mechanism (`llm_flag_path()`, `llm-enabled` file) and the `arkhe_service_ctl("start"/"stop", "llama-server")` calls. Rhea manages model lifecycle directly — starting/stopping the llama-server subprocess is Rhea's responsibility. The `llama-server` arkhe service definition in `services/base/` is no longer needed; Rhea spawns llama-server as a child process. If a `services/base/llama-server/` directory exists, it should be removed.
 
 ### 4b: New Notifications Settings Page
 
@@ -283,7 +300,9 @@ pub async fn query_llm(input: &str) -> Option<String> {
 
 **Changes to navigation:**
 - Add `Page::Notifications` variant to the page enum in `slate-settings/src/navigation.rs`
-- Wire into the page router
+- Update `Page::all()` to include `Page::Notifications` in the returned list
+- Add `Page::label()` and `Page::icon()` match arms for the new variant
+- Add the new variant to the exhaustive `view()` match in `slate-settings/src/main.rs`
 
 ---
 
