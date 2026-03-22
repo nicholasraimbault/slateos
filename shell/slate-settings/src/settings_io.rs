@@ -100,6 +100,8 @@ pub async fn save_and_notify_to(settings: Settings, section: String, path: PathB
 ///   - "disable": create /etc/sv/<service>/disabled
 ///
 /// Returns a status message. Failures are not fatal.
+/// Available for pages that need to control arkhe services (e.g. future display/power pages).
+#[allow(dead_code)]
 pub async fn arkhe_service_ctl(action: &str, service: &str) -> Result<String, String> {
     match action {
         "restart" => {
@@ -154,6 +156,7 @@ pub async fn arkhe_service_ctl(action: &str, service: &str) -> Result<String, St
 }
 
 /// Write a control file to signal arkhe to start/stop a service.
+#[allow(dead_code)]
 async fn arkhe_ctl_write(service: &str, action: &str) -> Result<(), String> {
     let ctl_path = format!("/run/arkhe/{service}/ctl/{action}");
     if let Some(parent) = Path::new(&ctl_path).parent() {
@@ -168,6 +171,7 @@ async fn arkhe_ctl_write(service: &str, action: &str) -> Result<(), String> {
 }
 
 /// Read the arkhd supervisor PID and send it SIGHUP to reload.
+#[allow(dead_code)]
 async fn signal_supervisor() -> Result<(), String> {
     let pid_str = tokio::fs::read_to_string("/run/arkhe/arkhd.pid")
         .await

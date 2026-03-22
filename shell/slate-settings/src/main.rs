@@ -19,7 +19,7 @@ use slate_common::toast::{ToastKind, ToastPosition, ToastState};
 use slate_common::{Palette, Settings};
 
 use navigation::Page;
-use pages::{about, ai, display, dock, fex, gestures, keyboard, network, wallpaper};
+use pages::{about, ai, display, dock, fex, gestures, keyboard, network, notifications, wallpaper};
 
 /// Debounce delay: wait this long after last change before saving.
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -53,6 +53,8 @@ struct SettingsApp {
     pending_section: Option<String>,
     /// Toast notification overlay state.
     toast_state: ToastState,
+    /// Last-fetched Rhea status string (ephemeral, not persisted).
+    rhea_status: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +81,8 @@ enum Message {
     Fex(fex::FexMsg),
     /// Network settings changed.
     Network(network::NetworkMsg),
+    /// Notification settings changed.
+    Notifications(notifications::NotifMsg),
     /// About info loaded.
     About(about::AboutMsg),
     /// Debounce timer fired: save settings now.
@@ -112,6 +116,7 @@ impl SettingsApp {
             last_change: None,
             pending_section: None,
             toast_state: ToastState::new(ToastPosition::BottomCenter),
+            rhea_status: "unknown".to_string(),
         };
 
         // Kick off background info gathering
@@ -156,7 +161,7 @@ impl SettingsApp {
                         });
                     }
                     Page::Ai => {
-                        return Task::perform(
+                        let scan_task = Task::perform(
                             async {
                                 tokio::task::spawn_blocking(ai::scan_models)
                                     .await
@@ -164,6 +169,11 @@ impl SettingsApp {
                             },
                             |models| Message::Ai(ai::AiMsg::ModelsScanned(models)),
                         );
+                        let status_task =
+                            Task::perform(async { ai::fetch_rhea_status().await }, |s| {
+                                Message::Ai(ai::AiMsg::StatusLoaded(s))
+                            });
+                        return Task::batch([scan_task, status_task]);
                     }
                     Page::Fex => {
                         return Task::perform(async { fex::check_fex_status().await }, |s| {
@@ -229,6 +239,11 @@ impl SettingsApp {
             }
 
             Message::Ai(msg) => {
+                // StatusLoaded is ephemeral — capture it without marking a settings change.
+                if let ai::AiMsg::StatusLoaded(ref status) = msg {
+                    self.rhea_status = status.clone();
+                    return Task::none();
+                }
                 if let Some(task) = ai::update(&mut self.settings.rhea, &mut self.ai_models, msg) {
                     return task.map(Message::Ai);
                 }
@@ -259,6 +274,11 @@ impl SettingsApp {
                     return task.map(Message::Network);
                 }
                 // Network is not in settings.toml, no save needed
+            }
+
+            Message::Notifications(msg) => {
+                notifications::update(&mut self.settings.notifications, msg);
+                self.mark_changed("notifications");
             }
 
             Message::About(about::AboutMsg::InfoLoaded(info)) => {
@@ -307,9 +327,14 @@ impl SettingsApp {
             Page::Dock => dock::view(&self.settings.dock).map(Message::Dock),
             Page::Gestures => gestures::view(&self.settings.gestures).map(Message::Gesture),
             Page::Keyboard => keyboard::view(&self.settings.keyboard).map(Message::Keyboard),
-            Page::Ai => ai::view(&self.settings.rhea, &self.ai_models).map(Message::Ai),
+            Page::Ai => {
+                ai::view(&self.settings.rhea, &self.ai_models, &self.rhea_status).map(Message::Ai)
+            }
             Page::Fex => fex::view(&self.fex_state).map(Message::Fex),
             Page::Network => network::view(&self.network_state).map(Message::Network),
+            Page::Notifications => {
+                notifications::view(&self.settings.notifications).map(Message::Notifications)
+            }
             Page::About => about::view(&self.about_info).map(Message::About),
         };
 

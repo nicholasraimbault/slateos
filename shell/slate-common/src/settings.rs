@@ -273,6 +273,14 @@ pub struct NotificationSettings {
     pub dnd: bool,
     /// How long heads-up notifications remain visible.
     pub heads_up_duration_secs: u32,
+    /// Play a sound when a notification arrives.
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
+}
+
+/// Default value helper for `bool` fields that default to `true`.
+fn default_true() -> bool {
+    true
 }
 
 impl Default for NotificationSettings {
@@ -280,6 +288,7 @@ impl Default for NotificationSettings {
         Self {
             dnd: false,
             heads_up_duration_secs: 5,
+            sound_enabled: true,
         }
     }
 }

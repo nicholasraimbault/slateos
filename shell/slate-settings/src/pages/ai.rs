@@ -1,32 +1,23 @@
-/// AI & LLM settings page.
+/// Rhea AI engine settings page.
 ///
-/// Controls the llama-server service via a flag file and provides
-/// model selection, endpoint URL, and API key inputs.
+/// Allows selecting a backend (None / Local / Claude / OpenAI / Ollama),
+/// configuring backend-specific options, and viewing the live Rhea status.
 use std::path::PathBuf;
 
-use iced::widget::{column, container, text, text_input, toggler};
+use iced::widget::{column, container, row, text, text_input};
 use iced::{Element, Length};
 
 use slate_common::settings::RheaSettings;
 
 // ---------------------------------------------------------------------------
-// LLM flag file
+// Model scanner
 // ---------------------------------------------------------------------------
-
-/// Path to the flag file that controls whether llama-server starts.
-/// The arkhe service checks for this file to decide whether to start.
-pub fn llm_flag_path() -> PathBuf {
-    std::env::var("HOME")
-        .map(|h| PathBuf::from(h).join(".config/slate/llm-enabled"))
-        .unwrap_or_else(|_| PathBuf::from("/root/.config/slate/llm-enabled"))
-}
 
 /// Scan for .gguf model files in `~/.config/slate/models/`.
 pub fn scan_models() -> Vec<PathBuf> {
     let dir = std::env::var("HOME")
         .map(|h| PathBuf::from(h).join(".config/slate/models"))
         .unwrap_or_else(|_| PathBuf::from("/root/.config/slate/models"));
-
     let mut models = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -46,17 +37,77 @@ pub fn scan_models() -> Vec<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
+// D-Bus status fetch (Linux only)
+// ---------------------------------------------------------------------------
+
+/// Fetch Rhea's current status string from `org.slate.Rhea.GetStatus`.
+/// Returns a human-readable label, guarded so the crate compiles on macOS.
+#[cfg(target_os = "linux")]
+pub async fn fetch_rhea_status() -> String {
+    use zbus::Connection;
+    let conn = match Connection::session().await {
+        Ok(c) => c,
+        Err(e) => return format!("D-Bus unavailable: {e}"),
+    };
+    let reply: Result<String, zbus::Error> = conn
+        .call_method(
+            Some("org.slate.Rhea"),
+            "/org/slate/Rhea",
+            Some("org.slate.Rhea"),
+            "GetStatus",
+            &(),
+        )
+        .await
+        .and_then(|msg| msg.body().deserialize::<String>());
+    match reply {
+        Ok(json) => {
+            // Extract backend/ready from {"backend":"local","ready":true} without serde_json.
+            let backend = extract_json_str(&json, "backend").unwrap_or("unknown");
+            let ready = json.contains("\"ready\":true");
+            format!(
+                "backend: {}, ready: {}",
+                backend,
+                if ready { "yes" } else { "no" }
+            )
+        }
+        Err(e) => format!("status error: {e}"),
+    }
+}
+
+/// No-op version for non-Linux platforms.
+#[cfg(not(target_os = "linux"))]
+pub async fn fetch_rhea_status() -> String {
+    "status unavailable (non-Linux)".to_string()
+}
+
+/// Extract a string value from `{"key":"value",...}` without pulling in serde_json.
+#[cfg(target_os = "linux")]
+fn extract_json_str<'a>(json: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{key}\":\"");
+    let start = json.find(needle.as_str())? + needle.len();
+    let rest = &json[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+// ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub enum AiMsg {
-    EnabledToggled(bool),
+    BackendSelected(String),
     ModelSelected(PathBuf),
-    EndpointChanged(String),
-    ApiKeyChanged(String),
+    IdleTimeoutChanged(f32),
+    ClaudeApiKeyChanged(String),
+    ClaudeModelChanged(String),
+    OpenAiBaseUrlChanged(String),
+    OpenAiApiKeyChanged(String),
+    OpenAiModelChanged(String),
+    OllamaBaseUrlChanged(String),
+    OllamaModelChanged(String),
     ModelsScanned(Vec<PathBuf>),
-    ServiceResult(Result<String, String>),
+    StatusLoaded(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -69,82 +120,81 @@ pub fn update(
     msg: AiMsg,
 ) -> Option<iced::Task<AiMsg>> {
     match msg {
-        AiMsg::EnabledToggled(v) => {
-            // Map the toggle to backend selection: "local" when enabled, "none" when disabled.
-            settings.backend = if v {
-                "local".to_string()
-            } else {
-                "none".to_string()
-            };
-            // Create or remove the flag file
-            let flag = llm_flag_path();
-            if v {
-                if let Some(parent) = flag.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&flag, "");
-            } else {
-                let _ = std::fs::remove_file(&flag);
-            }
-            // Start or stop the service
-            let action = if v { "start" } else { "stop" };
-            let task = iced::Task::perform(
-                async move { crate::settings_io::arkhe_service_ctl(action, "llama-server").await },
-                AiMsg::ServiceResult,
-            );
-            Some(task)
+        AiMsg::BackendSelected(b) => {
+            settings.backend = b;
+            None
         }
         AiMsg::ModelSelected(path) => {
-            // Store the filename (without path) as the local model name.
-            let name = path
+            settings.local.model = path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            settings.local.model = name;
             None
         }
-        AiMsg::EndpointChanged(url) => {
-            settings.openai.base_url = url;
+        AiMsg::IdleTimeoutChanged(v) => {
+            settings.local.idle_timeout_secs = v as u32;
             None
         }
-        AiMsg::ApiKeyChanged(key) => {
-            settings.openai.api_key_file = key;
+        AiMsg::ClaudeApiKeyChanged(v) => {
+            settings.claude.api_key_file = v;
+            None
+        }
+        AiMsg::ClaudeModelChanged(v) => {
+            settings.claude.model = v;
+            None
+        }
+        AiMsg::OpenAiBaseUrlChanged(v) => {
+            settings.openai.base_url = v;
+            None
+        }
+        AiMsg::OpenAiApiKeyChanged(v) => {
+            settings.openai.api_key_file = v;
+            None
+        }
+        AiMsg::OpenAiModelChanged(v) => {
+            settings.openai.model = v;
+            None
+        }
+        AiMsg::OllamaBaseUrlChanged(v) => {
+            settings.ollama.base_url = v;
+            None
+        }
+        AiMsg::OllamaModelChanged(v) => {
+            settings.ollama.model = v;
             None
         }
         AiMsg::ModelsScanned(found) => {
             *models = found;
             None
         }
-        AiMsg::ServiceResult(result) => {
-            match result {
-                Ok(msg) => tracing::info!("llama-server: {msg}"),
-                Err(msg) => tracing::warn!("llama-server: {msg}"),
-            }
-            None
-        }
+        // StatusLoaded is ephemeral — handled in main.rs, not stored in settings.
+        AiMsg::StatusLoaded(_) => None,
     }
 }
 
 // ---------------------------------------------------------------------------
-// View
+// View helpers
 // ---------------------------------------------------------------------------
 
-pub fn view<'a>(settings: &'a RheaSettings, models: &'a [PathBuf]) -> Element<'a, AiMsg> {
-    let mut items: Vec<Element<'a, AiMsg>> = Vec::new();
+fn backend_button<'a>(
+    label: &'static str,
+    value: &'static str,
+    current: &str,
+) -> Element<'a, AiMsg> {
+    let display = if current == value {
+        format!("[*] {label}")
+    } else {
+        label.to_string()
+    };
+    iced::widget::button(text(display).size(14))
+        .on_press(AiMsg::BackendSelected(value.to_string()))
+        .padding(8)
+        .into()
+}
 
-    items.push(text("AI & LLM").size(24).into());
-
-    let is_enabled = settings.backend != "none";
-    items.push(
-        toggler(is_enabled)
-            .label("Enable local LLM")
-            .on_toggle(AiMsg::EnabledToggled)
-            .into(),
-    );
-
-    // Model list
-    items.push(text("Models:").size(16).into());
+fn view_local_section<'a>(settings: &'a RheaSettings, models: &'a [PathBuf]) -> Element<'a, AiMsg> {
+    let mut items: Vec<Element<'a, AiMsg>> = vec![text("Local model").size(16).into()];
     if models.is_empty() {
         items.push(
             text("No .gguf models found in ~/.config/slate/models/")
@@ -163,8 +213,7 @@ pub fn view<'a>(settings: &'a RheaSettings, models: &'a [PathBuf]) -> Element<'a
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let is_active = settings.local.model == stem;
-            let label = if is_active {
+            let label = if settings.local.model == stem {
                 format!("[*] {name}")
             } else {
                 name
@@ -178,70 +227,273 @@ pub fn view<'a>(settings: &'a RheaSettings, models: &'a [PathBuf]) -> Element<'a
             );
         }
     }
-
-    // Endpoint URL
-    items.push(text("Endpoint URL:").size(16).into());
     items.push(
-        text_input("https://api.example.com/v1", &settings.openai.base_url)
-            .on_input(AiMsg::EndpointChanged)
-            .padding(8)
-            .into(),
+        text(format!(
+            "Idle timeout: {}s",
+            settings.local.idle_timeout_secs
+        ))
+        .size(14)
+        .into(),
     );
-
-    // API key file (secure field)
-    items.push(text("API Key File:").size(16).into());
     items.push(
-        text_input("path/to/key-file", &settings.openai.api_key_file)
-            .on_input(AiMsg::ApiKeyChanged)
+        iced::widget::slider(
+            10.0..=300.0,
+            settings.local.idle_timeout_secs as f32,
+            AiMsg::IdleTimeoutChanged,
+        )
+        .step(10.0)
+        .into(),
+    );
+    column(items).spacing(8).into()
+}
+
+fn view_claude_section<'a>(settings: &'a RheaSettings) -> Element<'a, AiMsg> {
+    column(vec![
+        text("Claude API").size(16).into(),
+        text("API Key File:").size(14).into(),
+        text_input("path/to/anthropic-key", &settings.claude.api_key_file)
+            .on_input(AiMsg::ClaudeApiKeyChanged)
             .secure(true)
             .padding(8)
             .into(),
-    );
-
-    let content = column(items).spacing(12).padding(20).width(Length::Fill);
-
-    container(content).width(Length::Fill).into()
+        text("Model:").size(14).into(),
+        text_input("claude-sonnet-4-6", &settings.claude.model)
+            .on_input(AiMsg::ClaudeModelChanged)
+            .padding(8)
+            .into(),
+    ])
+    .spacing(8)
+    .into()
 }
+
+fn view_openai_section<'a>(settings: &'a RheaSettings) -> Element<'a, AiMsg> {
+    column(vec![
+        text("OpenAI-compatible API").size(16).into(),
+        text("Base URL:").size(14).into(),
+        text_input("https://api.openai.com/v1", &settings.openai.base_url)
+            .on_input(AiMsg::OpenAiBaseUrlChanged)
+            .padding(8)
+            .into(),
+        text("API Key File:").size(14).into(),
+        text_input("path/to/openai-key", &settings.openai.api_key_file)
+            .on_input(AiMsg::OpenAiApiKeyChanged)
+            .secure(true)
+            .padding(8)
+            .into(),
+        text("Model:").size(14).into(),
+        text_input("gpt-4o-mini", &settings.openai.model)
+            .on_input(AiMsg::OpenAiModelChanged)
+            .padding(8)
+            .into(),
+    ])
+    .spacing(8)
+    .into()
+}
+
+fn view_ollama_section<'a>(settings: &'a RheaSettings) -> Element<'a, AiMsg> {
+    column(vec![
+        text("Ollama").size(16).into(),
+        text("Base URL:").size(14).into(),
+        text_input("http://localhost:11434", &settings.ollama.base_url)
+            .on_input(AiMsg::OllamaBaseUrlChanged)
+            .padding(8)
+            .into(),
+        text("Model:").size(14).into(),
+        text_input("llama3.2:3b", &settings.ollama.model)
+            .on_input(AiMsg::OllamaModelChanged)
+            .padding(8)
+            .into(),
+    ])
+    .spacing(8)
+    .into()
+}
+
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
+pub fn view<'a>(
+    settings: &'a RheaSettings,
+    models: &'a [PathBuf],
+    rhea_status: &'a str,
+) -> Element<'a, AiMsg> {
+    let backend_row = row![
+        backend_button("None", "none", &settings.backend),
+        backend_button("Local", "local", &settings.backend),
+        backend_button("Claude", "claude", &settings.backend),
+        backend_button("OpenAI", "openai", &settings.backend),
+        backend_button("Ollama", "ollama", &settings.backend),
+    ]
+    .spacing(6);
+
+    let mut items: Vec<Element<'a, AiMsg>> = vec![
+        text("Rhea").size(24).into(),
+        text(format!("Status: {rhea_status}")).size(13).into(),
+        backend_row.into(),
+    ];
+
+    match settings.backend.as_str() {
+        "local" => items.push(view_local_section(settings, models)),
+        "claude" => items.push(view_claude_section(settings)),
+        "openai" => items.push(view_openai_section(settings)),
+        "ollama" => items.push(view_ollama_section(settings)),
+        _ => {}
+    }
+
+    container(column(items).spacing(12).padding(20).width(Length::Fill))
+        .width(Length::Fill)
+        .into()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn settings() -> RheaSettings {
+        RheaSettings::default()
+    }
+
     #[test]
-    fn llm_flag_file_path_is_correct() {
-        let path = llm_flag_path();
-        let path_str = path.to_string_lossy();
-        assert!(
-            path_str.ends_with(".config/slate/llm-enabled"),
-            "unexpected path: {path_str}"
+    fn backend_selected_updates_backend() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(&mut s, &mut m, AiMsg::BackendSelected("claude".to_string()));
+        assert_eq!(s.backend, "claude");
+    }
+
+    #[test]
+    fn backend_none_sets_none() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(&mut s, &mut m, AiMsg::BackendSelected("none".to_string()));
+        assert_eq!(s.backend, "none");
+    }
+
+    #[test]
+    fn backend_ollama_sets_ollama() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(&mut s, &mut m, AiMsg::BackendSelected("ollama".to_string()));
+        assert_eq!(s.backend, "ollama");
+    }
+
+    #[test]
+    fn idle_timeout_rounds_to_u32() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(&mut s, &mut m, AiMsg::IdleTimeoutChanged(120.7));
+        assert_eq!(s.local.idle_timeout_secs, 120);
+    }
+
+    #[test]
+    fn claude_api_key_changed() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::ClaudeApiKeyChanged("/home/user/.config/slate/claude-key".to_string()),
         );
+        assert_eq!(s.claude.api_key_file, "/home/user/.config/slate/claude-key");
     }
 
     #[test]
-    fn endpoint_empty_clears_url() {
-        let mut s = RheaSettings::default();
-        let mut models = Vec::new();
-        update(&mut s, &mut models, AiMsg::EndpointChanged(String::new()));
-        assert!(s.openai.base_url.is_empty());
+    fn claude_model_changed() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::ClaudeModelChanged("claude-opus-4".to_string()),
+        );
+        assert_eq!(s.claude.model, "claude-opus-4");
     }
 
     #[test]
-    fn endpoint_non_empty_sets_url() {
-        let mut s = RheaSettings::default();
-        let mut models = Vec::new();
+    fn openai_fields_update() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::OpenAiBaseUrlChanged("https://custom.api.com/v1".to_string()),
+        );
+        assert_eq!(s.openai.base_url, "https://custom.api.com/v1");
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::OpenAiApiKeyChanged("/keys/openai".to_string()),
+        );
+        assert_eq!(s.openai.api_key_file, "/keys/openai");
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::OpenAiModelChanged("gpt-4o".to_string()),
+        );
+        assert_eq!(s.openai.model, "gpt-4o");
+    }
+
+    #[test]
+    fn ollama_fields_update() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::OllamaBaseUrlChanged("http://remote:11434".to_string()),
+        );
+        assert_eq!(s.ollama.base_url, "http://remote:11434");
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::OllamaModelChanged("mistral:7b".to_string()),
+        );
+        assert_eq!(s.ollama.model, "mistral:7b");
+    }
+
+    #[test]
+    fn models_scanned_replaces_list() {
+        let mut s = settings();
+        let mut models = vec![];
+        let new_models = vec![
+            PathBuf::from("/models/a.gguf"),
+            PathBuf::from("/models/b.gguf"),
+        ];
         update(
             &mut s,
             &mut models,
-            AiMsg::EndpointChanged("https://example.com".to_string()),
+            AiMsg::ModelsScanned(new_models.clone()),
         );
-        assert_eq!(s.openai.base_url, "https://example.com");
+        assert_eq!(models, new_models);
     }
 
     #[test]
-    fn api_key_empty_clears_file() {
-        let mut s = RheaSettings::default();
-        let mut models = Vec::new();
-        update(&mut s, &mut models, AiMsg::ApiKeyChanged(String::new()));
-        assert!(s.openai.api_key_file.is_empty());
+    fn model_selected_uses_stem() {
+        let mut s = settings();
+        let mut m = vec![];
+        update(
+            &mut s,
+            &mut m,
+            AiMsg::ModelSelected(PathBuf::from("/models/gemma-2b.gguf")),
+        );
+        assert_eq!(s.local.model, "gemma-2b");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn extract_json_str_works() {
+        let json = r#"{"backend":"local","ready":true}"#;
+        assert_eq!(extract_json_str(json, "backend"), Some("local"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn extract_json_str_missing_key_returns_none() {
+        let json = r#"{"backend":"local","ready":true}"#;
+        assert_eq!(extract_json_str(json, "model"), None);
     }
 }
