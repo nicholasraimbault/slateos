@@ -21,7 +21,7 @@ mod style;
 mod update;
 
 use std::collections::{HashMap, VecDeque};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::widget::column;
 use iced::{Element, Subscription, Task, Theme};
@@ -86,6 +86,10 @@ struct SlateShade {
     /// TODO: a proper correlation ID in the Rhea protocol would be the ideal
     /// long-term fix (avoids any ordering assumptions entirely).
     pending_summaries: VecDeque<String>,
+    /// Timestamp of the last brightness write, used to debounce slider events.
+    last_brightness_write: Instant,
+    /// Timestamp of the last volume write, used to debounce slider events.
+    last_volume_write: Instant,
 }
 
 impl Default for SlateShade {
@@ -100,6 +104,8 @@ impl Default for SlateShade {
             palette: Palette::default(),
             screen_height: DEFAULT_SCREEN_HEIGHT,
             pending_summaries: VecDeque::new(),
+            last_brightness_write: Instant::now(),
+            last_volume_write: Instant::now(),
         }
     }
 }
@@ -137,6 +143,8 @@ enum Message {
     InvokeActionResult(Result<(), String>),
     // Smart-reply suggestions returned by Rhea.SuggestReplies.
     SmartRepliesResult(uuid::Uuid, Vec<String>),
+    // Result of a quick-settings system call (brightness, volume, WiFi, etc.).
+    SystemResult(Result<(), String>),
 }
 
 // ---------------------------------------------------------------------------
