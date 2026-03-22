@@ -20,6 +20,7 @@ pub enum Page {
     Ai,
     Fex,
     Network,
+    Notifications,
     About,
 }
 
@@ -35,6 +36,7 @@ impl Page {
             Page::Ai,
             Page::Fex,
             Page::Network,
+            Page::Notifications,
             Page::About,
         ]
     }
@@ -47,9 +49,10 @@ impl Page {
             Page::Dock => "Dock",
             Page::Gestures => "Gestures",
             Page::Keyboard => "Keyboard",
-            Page::Ai => "AI & LLM",
+            Page::Ai => "Rhea",
             Page::Fex => "x86 Compat",
             Page::Network => "Network",
+            Page::Notifications => "Notifications",
             Page::About => "About",
         }
     }
@@ -65,6 +68,7 @@ impl Page {
             Page::Ai => "\u{1f916}",
             Page::Fex => "\u{1f4e6}",
             Page::Network => "\u{1f4f6}",
+            Page::Notifications => "\u{1f514}",
             Page::About => "\u{2139}",
         }
     }
@@ -110,7 +114,7 @@ mod tests {
     #[test]
     fn page_list_has_all_expected_pages() {
         let pages = Page::all();
-        assert_eq!(pages.len(), 9);
+        assert_eq!(pages.len(), 10);
         assert!(pages.contains(&Page::Display));
         assert!(pages.contains(&Page::Wallpaper));
         assert!(pages.contains(&Page::Dock));
@@ -119,6 +123,7 @@ mod tests {
         assert!(pages.contains(&Page::Ai));
         assert!(pages.contains(&Page::Fex));
         assert!(pages.contains(&Page::Network));
+        assert!(pages.contains(&Page::Notifications));
         assert!(pages.contains(&Page::About));
     }
 
