@@ -298,3 +298,33 @@ fn default_panel_has_no_toast() {
     let panel = ClawPanel::default();
     assert!(!panel.toast_state.is_visible());
 }
+
+#[test]
+fn update_rhea_status_result_ok_sets_backend() {
+    let mut panel = ClawPanel::default();
+    assert!(panel.rhea_backend.is_empty());
+    let json = r#"{"backend":"local","ready":true}"#.to_string();
+    let _ = update_app(&mut panel, Message::RheaStatusResult(Ok(json)));
+    assert_eq!(panel.rhea_backend, "local");
+}
+
+#[test]
+fn update_rhea_status_result_err_leaves_backend_empty() {
+    let mut panel = ClawPanel::default();
+    let _ = update_app(
+        &mut panel,
+        Message::RheaStatusResult(Err("connection refused".to_string())),
+    );
+    // Backend remains empty; failure is tolerated silently.
+    assert!(panel.rhea_backend.is_empty());
+}
+
+#[test]
+fn update_rhea_status_result_malformed_json_leaves_backend_empty() {
+    let mut panel = ClawPanel::default();
+    let _ = update_app(
+        &mut panel,
+        Message::RheaStatusResult(Ok("not-json".to_string())),
+    );
+    assert!(panel.rhea_backend.is_empty());
+}

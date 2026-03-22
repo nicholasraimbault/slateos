@@ -18,6 +18,7 @@ mod context;
 mod conversation;
 mod dbus_listener;
 mod panel;
+mod rhea_client;
 mod toast;
 
 use context::WindowContext;
@@ -109,6 +110,9 @@ enum Message {
 
     // Toast auto-dismiss tick
     ToastTick,
+
+    // Rhea GetStatus result on startup (JSON string or error)
+    RheaStatusResult(Result<String, String>),
 }
 
 // On Linux the message must be convertible to LayershellCustomActions. When no
@@ -133,7 +137,13 @@ impl iced_layershell::Application for ClawPanel {
     type Flags = ();
 
     fn new(_flags: ()) -> (Self, iced::Task<Message>) {
-        (Self::default(), iced::Task::none())
+        // Query Rhea's current backend on startup so the header label is
+        // populated immediately rather than waiting for a BackendChanged signal.
+        let task = iced::Task::perform(
+            rhea_client::call_rhea_get_status(),
+            Message::RheaStatusResult,
+        );
+        (Self::default(), task)
     }
 
     fn namespace(&self) -> String {
@@ -223,9 +233,10 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
 
             // Invoke Rhea.CompleteStream over D-Bus. Streaming chunks arrive
             // via the DbusEvent subscription (RheaChunk/RheaDone/RheaError).
-            return iced::Task::perform(call_rhea_complete_stream(content), |result| {
-                Message::RheaSendResult(result)
-            });
+            return iced::Task::perform(
+                rhea_client::call_rhea_complete_stream(content),
+                Message::RheaSendResult,
+            );
         }
         Message::RheaSendResult(result) => {
             if let Err(e) = result {
@@ -303,6 +314,22 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
         Message::ToastTick => {
             app.toast_state.tick();
         }
+        Message::RheaStatusResult(result) => match result {
+            Ok(json) => {
+                // Extract the "backend" field from the JSON status object
+                // returned by org.slate.Rhea.GetStatus.
+                if let Some(backend) = rhea_client::parse_backend_from_status_json(&json) {
+                    tracing::info!("Rhea backend on startup: {backend}");
+                    app.rhea_backend = backend;
+                } else {
+                    tracing::warn!("GetStatus JSON missing backend field: {json}");
+                }
+            }
+            Err(e) => {
+                // Rhea may not be running yet — silently tolerate the failure.
+                tracing::debug!("GetStatus unavailable on startup: {e}");
+            }
+        },
     }
 
     iced::Task::none()
@@ -416,41 +443,6 @@ fn dbus_subscription() -> iced::Subscription<Message> {
     });
 
     iced::Subscription::run_with_id("claw-panel-dbus", stream)
-}
-
-/// Call `org.slate.Rhea.CompleteStream` over D-Bus with the user's prompt.
-///
-/// The actual response text arrives as `CompletionChunk` D-Bus signals which
-/// are picked up by `dbus_listener::watch_rhea` and forwarded as
-/// `DbusEvent::RheaChunk` messages. This function only initiates the call and
-/// returns once the method returns (or errors).
-///
-/// A system context string is intentionally left empty here because Rhea
-/// gathers shell context internally (focused window, clipboard, etc.).
-#[cfg(target_os = "linux")]
-async fn call_rhea_complete_stream(prompt: String) -> Result<(), String> {
-    use slate_common::dbus::{RHEA_BUS_NAME, RHEA_INTERFACE, RHEA_PATH};
-
-    let connection = zbus::Connection::session()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let proxy = zbus::Proxy::new(&connection, RHEA_BUS_NAME, RHEA_PATH, RHEA_INTERFACE)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Empty system prompt -- Rhea supplies its own default.
-    proxy
-        .call_method("CompleteStream", &(prompt.as_str(), ""))
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
-/// Non-Linux stub: always returns an error so the UI can show a message.
-#[cfg(not(target_os = "linux"))]
-async fn call_rhea_complete_stream(_prompt: String) -> Result<(), String> {
-    Err("Rhea D-Bus is only available on Linux".to_string())
 }
 
 // ---------------------------------------------------------------------------
