@@ -11,10 +11,11 @@ mod settings_io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use iced::widget::{container, row};
+use iced::widget::{container, row, stack};
 use iced::{Element, Length, Subscription, Task, Theme};
 
 use slate_common::theme::create_theme;
+use slate_common::toast::{ToastKind, ToastPosition, ToastState};
 use slate_common::{Palette, Settings};
 
 use navigation::Page;
@@ -50,6 +51,8 @@ struct SettingsApp {
     last_change: Option<Instant>,
     /// Which section was last changed (for D-Bus signal).
     pending_section: Option<String>,
+    /// Toast notification overlay state.
+    toast_state: ToastState,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +85,8 @@ enum Message {
     SaveNow,
     /// Save completed.
     Saved,
+    /// Toast expiry tick.
+    ToastTick,
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +111,7 @@ impl SettingsApp {
             brightness: display::BrightnessState::default(),
             last_change: None,
             pending_section: None,
+            toast_state: ToastState::new(ToastPosition::BottomCenter),
         };
 
         // Kick off background info gathering
@@ -181,6 +187,11 @@ impl SettingsApp {
                     display::DisplayMsg::ScaleChanged(_)
                         | display::DisplayMsg::RotationLockToggled(_)
                 );
+                // Show a toast when brightness changes
+                if let display::DisplayMsg::BrightnessChanged(pct) = &msg {
+                    let label = format!("Brightness: {:.0}%", pct.clamp(1.0, 100.0));
+                    self.toast_state.push(label, ToastKind::Info);
+                }
                 if let Some(task) =
                     display::update(&mut self.settings.display, &mut self.brightness, msg)
                 {
@@ -232,6 +243,18 @@ impl SettingsApp {
             }
 
             Message::Network(msg) => {
+                // Show toasts for WiFi connection outcomes
+                if let network::NetworkMsg::ConnectionResult(ref result) = msg {
+                    match result {
+                        Ok(success) => {
+                            self.toast_state.push(success.clone(), ToastKind::Success);
+                        }
+                        Err(error) => {
+                            let label = format!("Connection failed: {error}");
+                            self.toast_state.push(label, ToastKind::Error);
+                        }
+                    }
+                }
                 if let Some(task) = network::update(&mut self.network_state, msg) {
                     return task.map(Message::Network);
                 }
@@ -261,6 +284,11 @@ impl SettingsApp {
 
             Message::Saved => {
                 tracing::debug!("settings saved successfully");
+                self.toast_state.push("Settings saved", ToastKind::Success);
+            }
+
+            Message::ToastTick => {
+                self.toast_state.tick();
             }
         }
 
@@ -290,7 +318,14 @@ impl SettingsApp {
             .height(Length::Fill)
             .padding(8);
 
-        row![sidebar, page_container]
+        let main_layout = row![sidebar, page_container]
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+        // Layer toast notifications above the main UI
+        let toast_overlay = self.toast_state.view(&self.palette);
+
+        stack![main_layout, toast_overlay]
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -301,12 +336,21 @@ impl SettingsApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        let mut subs = Vec::new();
+
         // Debounced save: if there is a pending change, fire SaveNow after SAVE_DEBOUNCE
         if self.last_change.is_some() {
-            iced::time::every(SAVE_DEBOUNCE).map(|_| Message::SaveNow)
-        } else {
-            Subscription::none()
+            subs.push(iced::time::every(SAVE_DEBOUNCE).map(|_| Message::SaveNow));
         }
+
+        // Toast expiry tick: only run while toasts are visible
+        if !self.toast_state.is_empty() {
+            subs.push(
+                iced::time::every(Duration::from_millis(250)).map(|_| Message::ToastTick),
+            );
+        }
+
+        Subscription::batch(subs)
     }
 
     /// Mark that settings were changed; starts the debounce timer.

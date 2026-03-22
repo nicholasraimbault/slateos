@@ -11,11 +11,14 @@ mod dock;
 mod magnification;
 mod windows;
 
-use iced::widget::{container, mouse_area, stack, Space};
+use std::time::Duration;
+
+use iced::widget::{column, container, mouse_area, stack, Space};
 use iced::{Element, Length, Subscription, Task, Theme};
 
 use context_menu::{MenuAction, MenuState};
 use slate_common::theme::create_theme;
+use slate_common::toast::{ToastKind, ToastPosition, ToastState};
 use slate_common::Palette;
 
 use desktop::DesktopEntry;
@@ -62,6 +65,8 @@ struct Shoal {
     touch_x: Option<f64>,
     /// Currently open context menu, if any.
     menu: Option<MenuState>,
+    /// Toast notification overlay state.
+    toast_state: ToastState,
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +100,8 @@ enum Message {
     Show,
     /// TouchFlow requested dock to hide.
     Hide,
+    /// Toast expiry tick.
+    ToastTick,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +131,7 @@ impl Shoal {
                 visible: true,
                 touch_x: None,
                 menu: None,
+                toast_state: ToastState::new(ToastPosition::BottomCenter),
             },
             Task::none(),
         )
@@ -179,7 +187,29 @@ impl Shoal {
                 self.open_menu(&desktop_id);
             }
             Message::MenuAction(action) => {
+                // Capture the app name before clearing the menu for toast messages
+                let app_name = self
+                    .menu
+                    .as_ref()
+                    .map(|m| m.app_name.clone())
+                    .unwrap_or_default();
                 self.menu = None;
+
+                // Show toast feedback for the action
+                match &action {
+                    MenuAction::KeepInDock(_) => {
+                        self.toast_state
+                            .push(format!("Pinned {app_name}"), ToastKind::Success);
+                    }
+                    MenuAction::RemoveFromDock(_) => {
+                        self.toast_state
+                            .push(format!("Removed {app_name}"), ToastKind::Info);
+                    }
+                    MenuAction::CloseWindow(_) | MenuAction::CloseAllWindows(_) => {
+                        self.toast_state.push("App closed", ToastKind::Info);
+                    }
+                }
+
                 return self.handle_menu_action(action);
             }
             Message::MenuDismiss => {
@@ -210,6 +240,9 @@ impl Shoal {
             Message::Hide => {
                 self.visible = false;
             }
+            Message::ToastTick => {
+                self.toast_state.tick();
+            }
         }
 
         Task::none()
@@ -236,6 +269,12 @@ impl Shoal {
             .center_x(Length::Fill)
             .center_y(Length::Fixed(dock::DOCK_HEIGHT as f32));
 
+        // Toast overlay rendered above the dock bar
+        let toast_overlay = self.toast_state.view(&self.palette);
+
+        // Combine dock and toasts vertically (toasts above dock)
+        let dock_with_toasts = column![toast_overlay, dock_container];
+
         // If a context menu is open, overlay it above the dock
         if let Some(ref menu_state) = self.menu {
             let menu_popup =
@@ -257,9 +296,9 @@ impl Shoal {
             .on_press(Message::MenuDismiss)
             .into();
 
-            stack![dismiss_area, dock_container, menu_overlay].into()
+            stack![dismiss_area, dock_with_toasts, menu_overlay].into()
         } else {
-            dock_container.into()
+            dock_with_toasts.into()
         }
     }
 
@@ -268,7 +307,17 @@ impl Shoal {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        iced::time::every(std::time::Duration::from_secs(POLL_INTERVAL_SECS)).map(|_| Message::Tick)
+        let mut subs =
+            vec![iced::time::every(Duration::from_secs(POLL_INTERVAL_SECS)).map(|_| Message::Tick)];
+
+        // Toast expiry tick: only run while toasts are visible
+        if !self.toast_state.is_empty() {
+            subs.push(
+                iced::time::every(Duration::from_millis(250)).map(|_| Message::ToastTick),
+            );
+        }
+
+        Subscription::batch(subs)
     }
 }
 
@@ -477,6 +526,7 @@ impl Clone for Shoal {
             visible: self.visible,
             touch_x: self.touch_x,
             menu: self.menu.clone(),
+            toast_state: self.toast_state.clone(),
         }
     }
 }
@@ -692,6 +742,77 @@ mod tests {
     fn icon_for_menu_returns_none_for_missing() {
         let icons: Vec<DockIcon> = vec![];
         assert!(icon_for_menu(icons.iter(), "firefox").is_none());
+    }
+
+    #[test]
+    fn shoal_starts_with_empty_toasts() {
+        let (state, _) = Shoal::new();
+        assert!(state.toast_state.is_empty(), "no toasts on startup");
+    }
+
+    #[test]
+    fn shoal_pin_action_pushes_success_toast() {
+        let (mut state, _) = Shoal::new();
+        // Set up a running app with a matching desktop entry for name lookup
+        state.all_entries.push(DesktopEntry {
+            name: "Firefox".into(),
+            exec: "firefox".into(),
+            icon: "firefox".into(),
+            desktop_id: "firefox".into(),
+        });
+        state.running = vec![RunningApp {
+            app_id: "firefox".into(),
+            title: "Firefox".into(),
+            is_focused: true,
+        }];
+        let _ = state.update(Message::AppLongPress("firefox".into()));
+        // Trigger a KeepInDock action
+        let _ = state.update(Message::MenuAction(MenuAction::KeepInDock(
+            "firefox".into(),
+        )));
+        assert_eq!(state.toast_state.len(), 1);
+        assert_eq!(state.toast_state.toasts()[0].message(), "Pinned Firefox");
+        assert_eq!(state.toast_state.toasts()[0].kind(), ToastKind::Success);
+    }
+
+    #[test]
+    fn shoal_unpin_action_pushes_info_toast() {
+        let (mut state, _) = Shoal::new();
+        // Open a menu for a pinned app
+        state.running = vec![RunningApp {
+            app_id: "Alacritty".into(),
+            title: "Alacritty".into(),
+            is_focused: false,
+        }];
+        let _ = state.update(Message::AppLongPress("Alacritty".into()));
+        let _ = state.update(Message::MenuAction(MenuAction::RemoveFromDock(
+            "Alacritty".into(),
+        )));
+        assert_eq!(state.toast_state.len(), 1);
+        assert_eq!(state.toast_state.toasts()[0].kind(), ToastKind::Info);
+    }
+
+    #[test]
+    fn shoal_close_action_pushes_info_toast() {
+        let (mut state, _) = Shoal::new();
+        state.running = vec![RunningApp {
+            app_id: "firefox".into(),
+            title: "Firefox".into(),
+            is_focused: true,
+        }];
+        let _ = state.update(Message::AppLongPress("firefox".into()));
+        let _ = state.update(Message::MenuAction(MenuAction::CloseWindow(
+            "firefox".into(),
+        )));
+        assert_eq!(state.toast_state.len(), 1);
+        assert_eq!(state.toast_state.toasts()[0].message(), "App closed");
+    }
+
+    #[test]
+    fn shoal_toast_tick_does_not_panic_when_empty() {
+        let (mut state, _) = Shoal::new();
+        let _ = state.update(Message::ToastTick);
+        assert!(state.toast_state.is_empty());
     }
 
     #[cfg(target_os = "linux")]
