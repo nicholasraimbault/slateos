@@ -735,4 +735,105 @@ mod tests {
         assert_eq!(result, DispatchResult::Passthrough);
         assert!(emitter.recorded().is_empty());
     }
+
+    // ---- ContinuousEdge dispatch ----
+
+    #[tokio::test]
+    async fn continuous_edge_update_emits_edge_gesture_signal() {
+        use crate::edge::{EdgeGesture, GesturePhase};
+
+        let niri = MockNiri::new();
+        let emitter = MockEmitter::new();
+        let config = default_config();
+        let gesture = GestureType::ContinuousEdge(EdgeGesture::new(
+            Edge::Top,
+            GesturePhase::Update,
+            0.4,
+            300.0,
+        ));
+
+        let result = dispatch_gesture(&gesture, &niri, &emitter, &config)
+            .await
+            .unwrap();
+        assert_eq!(result, DispatchResult::Dispatched);
+
+        let recorded = emitter.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(
+            &recorded[0],
+            EmitterCall::EdgeGesture { edge, phase, .. }
+                if edge == "top" && phase == "update"
+        ));
+        assert!(niri.recorded().is_empty());
+    }
+
+    #[tokio::test]
+    async fn continuous_edge_start_emits_edge_gesture_signal() {
+        use crate::edge::{EdgeGesture, GesturePhase};
+
+        let niri = MockNiri::new();
+        let emitter = MockEmitter::new();
+        let config = default_config();
+        let gesture =
+            GestureType::ContinuousEdge(EdgeGesture::new(Edge::Top, GesturePhase::Start, 0.0, 0.0));
+
+        let result = dispatch_gesture(&gesture, &niri, &emitter, &config)
+            .await
+            .unwrap();
+        assert_eq!(result, DispatchResult::Dispatched);
+
+        let recorded = emitter.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(
+            &recorded[0],
+            EmitterCall::EdgeGesture { edge, phase, .. }
+                if edge == "top" && phase == "start"
+        ));
+    }
+
+    #[tokio::test]
+    async fn continuous_edge_end_emits_edge_gesture_signal() {
+        use crate::edge::{EdgeGesture, GesturePhase};
+
+        let niri = MockNiri::new();
+        let emitter = MockEmitter::new();
+        let config = default_config();
+        let gesture =
+            GestureType::ContinuousEdge(EdgeGesture::new(Edge::Top, GesturePhase::End, 0.8, 150.0));
+
+        let result = dispatch_gesture(&gesture, &niri, &emitter, &config)
+            .await
+            .unwrap();
+        assert_eq!(result, DispatchResult::Dispatched);
+
+        let recorded = emitter.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(
+            &recorded[0],
+            EmitterCall::EdgeGesture { edge, phase, .. }
+                if edge == "top" && phase == "end"
+        ));
+    }
+
+    #[tokio::test]
+    async fn continuous_edge_disabled_when_edge_swipe_off() {
+        use crate::edge::{EdgeGesture, GesturePhase};
+
+        let niri = MockNiri::new();
+        let emitter = MockEmitter::new();
+        let mut config = default_config();
+        config.gestures.edge_swipe_enabled = false;
+        let gesture = GestureType::ContinuousEdge(EdgeGesture::new(
+            Edge::Top,
+            GesturePhase::Update,
+            0.5,
+            200.0,
+        ));
+
+        let result = dispatch_gesture(&gesture, &niri, &emitter, &config)
+            .await
+            .unwrap();
+        assert_eq!(result, DispatchResult::Passthrough);
+        assert!(emitter.recorded().is_empty());
+    }
 }

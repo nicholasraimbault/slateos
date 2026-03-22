@@ -85,7 +85,10 @@ impl TouchFlowEmitter {
         progress: f64,
         velocity: f64,
     ) -> Result<()> {
-        debug!(edge, phase, progress, velocity, "emitting EdgeGesture signal");
+        debug!(
+            edge,
+            phase, progress, velocity, "emitting EdgeGesture signal"
+        );
         let result = self
             .connection
             .call_method(
@@ -165,8 +168,8 @@ pub mod mock {
         EdgeGesture {
             edge: String,
             phase: String,
-            progress: u64,   // stored as bits for PartialEq
-            velocity: u64,   // stored as bits for PartialEq
+            progress: u64, // stored as bits for PartialEq
+            velocity: u64, // stored as bits for PartialEq
         },
     }
 

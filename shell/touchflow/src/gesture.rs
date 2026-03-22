@@ -260,10 +260,7 @@ impl Recognizer {
             let track = self.fingers[slot].as_ref();
             let progress = track.map_or(0.0, |t| self.compute_top_progress(t));
             let velocity = self.last_move_y.map_or(0.0, |prev_y| {
-                self.compute_instantaneous_velocity(
-                    track.map_or(prev_y, |t| t.current.1),
-                    time,
-                )
+                self.compute_instantaneous_velocity(track.map_or(prev_y, |t| t.current.1), time)
             });
             self.tracking_continuous_edge = false;
             self.last_move_time = None;
@@ -570,7 +567,10 @@ mod tests {
         let (d1, u1) = tap_events(0, 500, 500, now);
         r.on_event(&d1);
         let first = r.on_event(&u1);
-        assert!(matches!(last_final_gesture(&first), Some(GestureType::Tap { .. })));
+        assert!(matches!(
+            last_final_gesture(&first),
+            Some(GestureType::Tap { .. })
+        ));
 
         // Second tap within 300ms gap.
         let t2 = now + Duration::from_millis(200);
@@ -1204,7 +1204,9 @@ mod tests {
         // Should contain a ContinuousEdge(End).
         let end_events: Vec<_> = result
             .iter()
-            .filter(|g| matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::End))
+            .filter(
+                |g| matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::End),
+            )
             .collect();
         assert_eq!(
             end_events.len(),
@@ -1304,7 +1306,9 @@ mod tests {
             time: now + Duration::from_millis(100),
         });
         assert!(
-            !result.iter().any(|g| matches!(g, GestureType::ContinuousEdge(_))),
+            !result
+                .iter()
+                .any(|g| matches!(g, GestureType::ContinuousEdge(_))),
             "left edge move should not emit continuous events, got {result:?}"
         );
     }
@@ -1367,7 +1371,9 @@ mod tests {
             time: now + Duration::from_millis(150),
         });
         assert!(
-            end.iter().any(|g| matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::End)),
+            end.iter().any(
+                |g| matches!(g, GestureType::ContinuousEdge(eg) if eg.phase == GesturePhase::End)
+            ),
             "expected End in results, got {end:?}"
         );
     }
