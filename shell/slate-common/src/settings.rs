@@ -266,6 +266,11 @@ impl Default for RheaOllamaSettings {
     }
 }
 
+/// Returns `true` — used as the serde default for boolean "enabled" fields.
+fn default_true() -> bool {
+    true
+}
+
 /// Notification display preferences.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NotificationSettings {
@@ -273,6 +278,9 @@ pub struct NotificationSettings {
     pub dnd: bool,
     /// How long heads-up notifications remain visible.
     pub heads_up_duration_secs: u32,
+    /// Play a sound when a non-silent notification arrives.
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
 }
 
 impl Default for NotificationSettings {
@@ -280,6 +288,7 @@ impl Default for NotificationSettings {
         Self {
             dnd: false,
             heads_up_duration_secs: 5,
+            sound_enabled: true,
         }
     }
 }

@@ -75,6 +75,18 @@ pub struct Notification {
     pub heads_up: bool,
     /// Grouping key for collapsing related notifications.
     pub group_key: Option<String>,
+    /// Milliseconds until this notification auto-dismisses.
+    /// -1 = server default, 0 = never expire, >0 = ms until dismiss.
+    #[serde(default = "default_expire_timeout")]
+    pub expire_timeout_ms: i32,
+    /// When true, the notification sound is suppressed even if sound is enabled.
+    #[serde(default)]
+    pub suppress_sound: bool,
+}
+
+/// Default value for `expire_timeout_ms`: -1 means use the server default.
+fn default_expire_timeout() -> i32 {
+    -1
 }
 
 impl Notification {
@@ -101,6 +113,8 @@ impl Notification {
             desktop_entry: None,
             heads_up: true,
             group_key: None,
+            expire_timeout_ms: default_expire_timeout(),
+            suppress_sound: false,
         }
     }
 }
@@ -141,6 +155,36 @@ mod tests {
         assert!(n.desktop_entry.is_none());
         assert!(n.group_key.is_none());
         assert!(n.app_icon.is_empty());
+        // New fields default to server-default timeout and no sound suppression.
+        assert_eq!(n.expire_timeout_ms, -1);
+        assert!(!n.suppress_sound);
+    }
+
+    #[test]
+    fn default_expire_timeout_is_minus_one() {
+        assert_eq!(default_expire_timeout(), -1);
+    }
+
+    #[test]
+    fn notification_deserializes_without_new_fields() {
+        // Older TOML without expire_timeout_ms / suppress_sound must still parse.
+        let toml = r#"
+uuid = "550e8400-e29b-41d4-a716-446655440000"
+fd_id = 1
+app_name = "app"
+app_icon = ""
+summary = "subject"
+body = "body"
+actions = []
+urgency = "Normal"
+timestamp = "2024-01-01T00:00:00Z"
+read = false
+persistent = false
+heads_up = true
+"#;
+        let n: Notification = toml::from_str(toml).expect("deserialize old TOML");
+        assert_eq!(n.expire_timeout_ms, -1);
+        assert!(!n.suppress_sound);
     }
 
     #[test]
