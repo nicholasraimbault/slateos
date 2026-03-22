@@ -4131,6 +4131,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "slate-notifyd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "slate-common",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zbus 5.14.0",
+]
+
+[[package]]
 name = "slate-palette"
 version = "0.1.0"
 dependencies = [
