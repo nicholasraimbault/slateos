@@ -1,8 +1,10 @@
-// D-Bus listener for external show/hide and palette signals.
+// D-Bus listener for external show/hide, palette signals, and Rhea AI signals.
 //
 // TouchFlow dispatches gesture events over D-Bus to control the Claw Panel
 // (right-edge swipe to show, swipe-right-on-panel to hide, etc.).
 // The palette daemon broadcasts colour changes that we pick up here.
+// Rhea (the AI engine) emits CompletionChunk / CompletionDone / CompletionError
+// signals that we forward to the UI message loop.
 //
 // On non-Linux platforms the listener is a no-op that keeps the subscription
 // alive without connecting to any bus.
@@ -13,7 +15,9 @@ use slate_common::Palette;
 #[cfg(any(target_os = "linux", test))]
 use slate_common::dbus::{CLAW_INTERFACE, CLAW_PATH};
 #[cfg(target_os = "linux")]
-use slate_common::dbus::{PALETTE_BUS_NAME, PALETTE_INTERFACE, PALETTE_PATH};
+use slate_common::dbus::{
+    PALETTE_BUS_NAME, PALETTE_INTERFACE, PALETTE_PATH, RHEA_BUS_NAME, RHEA_INTERFACE, RHEA_PATH,
+};
 
 /// Events received over D-Bus that the panel cares about.
 #[derive(Debug, Clone)]
@@ -22,6 +26,14 @@ pub enum DbusEvent {
     Hide,
     Toggle,
     PaletteChanged(Palette),
+    /// A streaming text chunk from the Rhea AI engine.
+    RheaChunk(String),
+    /// Rhea finished generating a response.
+    RheaDone,
+    /// Rhea encountered an error while generating a response.
+    RheaError(String),
+    /// The active Rhea backend name changed.
+    RheaBackendChanged(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -109,11 +121,77 @@ pub async fn watch_palette(
 }
 
 // ---------------------------------------------------------------------------
+// Rhea AI signal listener
+// ---------------------------------------------------------------------------
+
+/// Subscribe to streaming completion signals from the Rhea AI engine.
+///
+/// Listens for `CompletionChunk`, `CompletionDone`, and `CompletionError`
+/// signals on `org.slate.Rhea` and forwards them to `event_tx`. Also listens
+/// for `BackendChanged` so the panel can display the active backend name.
+///
+/// This function returns when the signal stream ends (i.e. the bus connection
+/// is dropped), which should only happen during shutdown.
+#[cfg(target_os = "linux")]
+pub async fn watch_rhea(
+    event_tx: tokio::sync::mpsc::UnboundedSender<DbusEvent>,
+) -> Result<(), anyhow::Error> {
+    use futures_util::StreamExt;
+
+    let connection = zbus::Connection::session().await?;
+
+    let proxy = zbus::Proxy::new(&connection, RHEA_BUS_NAME, RHEA_PATH, RHEA_INTERFACE).await?;
+
+    // Subscribe to all four signals concurrently.
+    let mut chunk_stream = proxy.receive_signal("CompletionChunk").await?;
+    let mut done_stream = proxy.receive_signal("CompletionDone").await?;
+    let mut error_stream = proxy.receive_signal("CompletionError").await?;
+    let mut backend_stream = proxy.receive_signal("BackendChanged").await?;
+
+    tracing::info!("Subscribed to Rhea D-Bus signals at {RHEA_PATH}");
+
+    loop {
+        tokio::select! {
+            Some(signal) = chunk_stream.next() => {
+                if let Ok(chunk) = signal.body().deserialize::<String>() {
+                    let _ = event_tx.send(DbusEvent::RheaChunk(chunk));
+                }
+            }
+            Some(_signal) = done_stream.next() => {
+                // CompletionDone carries full_text as an argument but we only
+                // need to know it finished — the chunks already built the text.
+                let _ = event_tx.send(DbusEvent::RheaDone);
+            }
+            Some(signal) = error_stream.next() => {
+                let msg = signal
+                    .body()
+                    .deserialize::<String>()
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                let _ = event_tx.send(DbusEvent::RheaError(msg));
+            }
+            Some(signal) = backend_stream.next() => {
+                if let Ok(name) = signal.body().deserialize::<String>() {
+                    let _ = event_tx.send(DbusEvent::RheaBackendChanged(name));
+                }
+            }
+            else => {
+                // All streams closed — Rhea has shut down or disconnected.
+                tracing::warn!("Rhea D-Bus signal streams all closed");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // D-Bus subscription entry point
 // ---------------------------------------------------------------------------
 
-/// Run the D-Bus listener loop on Linux: register the Claw service and
-/// watch for palette changes. Events are forwarded through `event_tx`.
+/// Run the D-Bus listener loop on Linux: register the Claw service,
+/// watch for palette changes, and subscribe to Rhea AI signals.
+/// Events are forwarded through `event_tx`.
 ///
 /// This function never returns under normal operation; it keeps the D-Bus
 /// connection alive so incoming signals and method calls are processed.
@@ -136,10 +214,21 @@ pub async fn run(event_tx: tokio::sync::mpsc::UnboundedSender<DbusEvent>) {
 
     tracing::info!("Claw D-Bus service registered at {CLAW_PATH}");
 
-    // Start palette watcher in background.
-    let palette_tx = event_tx;
-    if let Err(e) = watch_palette(palette_tx).await {
-        tracing::warn!("Palette watcher ended: {e}");
+    // Start palette watcher and Rhea signal watcher concurrently.
+    let palette_tx = event_tx.clone();
+    let rhea_tx = event_tx;
+
+    tokio::select! {
+        result = watch_palette(palette_tx) => {
+            if let Err(e) = result {
+                tracing::warn!("Palette watcher ended: {e}");
+            }
+        }
+        result = watch_rhea(rhea_tx) => {
+            if let Err(e) = result {
+                tracing::warn!("Rhea signal watcher ended: {e}");
+            }
+        }
     }
 
     // Keep the task alive so the D-Bus connection is not dropped.
@@ -176,5 +265,24 @@ mod tests {
         let _hide = DbusEvent::Hide;
         let _toggle = DbusEvent::Toggle;
         let _palette = DbusEvent::PaletteChanged(Palette::default());
+    }
+
+    #[test]
+    fn rhea_dbus_event_variants_constructible() {
+        let _chunk = DbusEvent::RheaChunk("hello world".to_string());
+        let _done = DbusEvent::RheaDone;
+        let _error = DbusEvent::RheaError("timeout".to_string());
+        let _backend = DbusEvent::RheaBackendChanged("local".to_string());
+    }
+
+    #[test]
+    fn rhea_dbus_event_variants_are_debug_clone() {
+        let chunk = DbusEvent::RheaChunk("test chunk".to_string());
+        let _cloned = chunk.clone();
+        let _debug = format!("{chunk:?}");
+
+        let done = DbusEvent::RheaDone;
+        let _cloned = done.clone();
+        let _debug = format!("{done:?}");
     }
 }

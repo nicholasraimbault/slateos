@@ -1,30 +1,27 @@
-// Claw Panel -- OpenClaw AI sidebar for Slate OS.
+// Claw Panel -- AI sidebar for SlateOS.
 //
 // A right-anchored layer-shell panel that provides context-aware AI
-// assistance through the local OpenClaw server. All intelligence lives
-// server-side; this crate is the touch-friendly Wayland UI shell.
+// assistance through the Rhea AI engine (accessed over D-Bus). All
+// intelligence lives in Rhea; this crate is the touch-friendly Wayland UI.
 //
 // Subscriptions:
 //   1. D-Bus listener  -- palette changes + show/hide/toggle from TouchFlow
-//   2. OpenClaw client  -- streaming WebSocket responses from the AI server
-//   3. Context poll     -- periodic focused-window check via niri IPC
-
-// Most runtime infrastructure (D-Bus, WebSocket, message variants) appears
-// dead on macOS because the full wiring only runs on Linux with a live
-// Wayland session. Suppress dead_code warnings crate-wide.
+//                         + streaming Rhea CompletionChunk/Done/Error signals
+//   2. Context poll    -- periodic focused-window check via niri IPC
+// Most runtime infrastructure (D-Bus, message variants) appears dead on macOS
+// because the full wiring only runs on Linux with a live Wayland session.
+// Suppress dead_code warnings crate-wide.
 #![allow(dead_code)]
 
 mod clipboard;
 mod context;
 mod conversation;
 mod dbus_listener;
-mod openclaw;
 mod panel;
 mod toast;
 
 use context::WindowContext;
 use conversation::Conversation;
-use openclaw::{ClientEvent, OpenClawClient, QueryMessage};
 use panel::PanelAction;
 use slate_common::Palette;
 use toast::ToastState;
@@ -48,9 +45,11 @@ struct ClawPanel {
     palette: Palette,
     current_context: Option<WindowContext>,
     input_text: String,
-    openclaw_client: Option<OpenClawClient>,
     is_streaming: bool,
     toast_state: ToastState,
+    /// Name of the active Rhea backend (e.g. "local", "cloud"). Empty until
+    /// we receive a BackendChanged signal or query GetStatus on startup.
+    rhea_backend: String,
 }
 
 impl Default for ClawPanel {
@@ -62,9 +61,9 @@ impl Default for ClawPanel {
             palette: Palette::default(),
             current_context: None,
             input_text: String::new(),
-            openclaw_client: None,
             is_streaming: false,
             toast_state: ToastState::new(),
+            rhea_backend: String::new(),
         }
     }
 }
@@ -90,10 +89,8 @@ enum Message {
     InputChanged(String),
     Send,
 
-    // OpenClaw streaming response
-    ResponseChunk(String),
-    ResponseDone,
-    OpenClawError(String),
+    // Rhea D-Bus send result (fires once CompleteStream call returns or fails)
+    RheaSendResult(Result<(), String>),
 
     // Resize (left-edge drag)
     Resize(u32),
@@ -104,14 +101,8 @@ enum Message {
     // Tick for context polling
     ContextPollTick,
 
-    // D-Bus event forwarding
+    // D-Bus event forwarding (includes Rhea streaming signals)
     DbusEvent(dbus_listener::DbusEvent),
-
-    // OpenClaw client event forwarding
-    OpenClawEvent(ClientEvent),
-
-    // The OpenClaw client handle has been created by the background task.
-    OpenClawClientReady(OpenClawClient),
 
     // Clipboard copy result (success message or error string)
     ClipboardResult(Result<String, String>),
@@ -230,34 +221,20 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
             app.input_text.clear();
             app.is_streaming = true;
 
-            if let Some(client) = app.openclaw_client.clone() {
-                let query = QueryMessage::new(content, app.current_context.clone());
-                return iced::Task::perform(
-                    async move { client.send_query(query).await },
-                    |result| match result {
-                        // Query dispatched; response chunks arrive via the
-                        // OpenClawEvent subscription.
-                        Ok(()) => Message::ResponseDone,
-                        Err(e) => Message::OpenClawError(e.to_string()),
-                    },
-                );
+            // Invoke Rhea.CompleteStream over D-Bus. Streaming chunks arrive
+            // via the DbusEvent subscription (RheaChunk/RheaDone/RheaError).
+            return iced::Task::perform(call_rhea_complete_stream(content), |result| {
+                Message::RheaSendResult(result)
+            });
+        }
+        Message::RheaSendResult(result) => {
+            if let Err(e) = result {
+                // The D-Bus call itself failed before any chunks arrived.
+                app.is_streaming = false;
+                app.conversation
+                    .add_assistant_message(format!("Rhea unavailable: {e}"));
             }
-
-            // No client connected -- show an error inline.
-            app.conversation
-                .add_assistant_message("OpenClaw unavailable".to_string());
-            app.is_streaming = false;
-        }
-        Message::ResponseChunk(chunk) => {
-            app.conversation.append_to_assistant(&chunk);
-        }
-        Message::ResponseDone => {
-            app.is_streaming = false;
-        }
-        Message::OpenClawError(err) => {
-            app.is_streaming = false;
-            app.conversation
-                .add_assistant_message(format!("Error: {err}"));
+            // On Ok(()), streaming chunks will arrive via DbusEvent.
         }
         Message::Resize(width) => {
             app.panel_width = width.clamp(panel::MIN_WIDTH, panel::MAX_WIDTH);
@@ -298,30 +275,22 @@ fn update_app(app: &mut ClawPanel, message: Message) -> iced::Task<Message> {
             dbus_listener::DbusEvent::PaletteChanged(palette) => {
                 app.palette = palette;
             }
-        },
-        Message::OpenClawEvent(event) => match event {
-            ClientEvent::Connected => {
-                tracing::info!("Connected to OpenClaw");
-            }
-            ClientEvent::Chunk(chunk) => {
+            dbus_listener::DbusEvent::RheaChunk(chunk) => {
                 app.conversation.append_to_assistant(&chunk);
             }
-            ClientEvent::Done => {
+            dbus_listener::DbusEvent::RheaDone => {
                 app.is_streaming = false;
             }
-            ClientEvent::Error(err) => {
+            dbus_listener::DbusEvent::RheaError(err) => {
                 app.is_streaming = false;
                 app.conversation
                     .add_assistant_message(format!("Error: {err}"));
             }
-            ClientEvent::Disconnected => {
-                tracing::warn!("Disconnected from OpenClaw");
+            dbus_listener::DbusEvent::RheaBackendChanged(name) => {
+                tracing::info!("Rhea backend changed to: {name}");
+                app.rhea_backend = name;
             }
         },
-        Message::OpenClawClientReady(client) => {
-            tracing::info!("OpenClaw client handle ready");
-            app.openclaw_client = Some(client);
-        }
         Message::ClipboardResult(result) => match result {
             Ok(msg) => {
                 app.toast_state.show_success(msg);
@@ -388,19 +357,19 @@ fn view_app(app: &ClawPanel) -> iced::Element<'_, Message> {
         app.is_streaming,
         &app.toast_state,
         app.palette.surface,
+        &app.rhea_backend,
     )
     .map(Message::PanelAction)
 }
 
-/// Build all iced subscriptions: D-Bus events, OpenClaw WebSocket,
+/// Build all iced subscriptions: D-Bus events (including Rhea AI signals),
 /// periodic context polling, and toast auto-dismiss.
 fn subscription_app(app: &ClawPanel) -> iced::Subscription<Message> {
     let dbus_sub = dbus_subscription();
-    let openclaw_sub = openclaw_subscription();
     let context_sub = iced::time::every(std::time::Duration::from_secs(CONTEXT_POLL_SECS))
         .map(|_| Message::ContextPollTick);
 
-    let mut subs = vec![dbus_sub, openclaw_sub, context_sub];
+    let mut subs = vec![dbus_sub, context_sub];
 
     // Only tick the toast timer when a toast is visible, to avoid
     // unnecessary wakeups when the panel is idle.
@@ -449,45 +418,39 @@ fn dbus_subscription() -> iced::Subscription<Message> {
     iced::Subscription::run_with_id("claw-panel-dbus", stream)
 }
 
-/// Subscription that runs the OpenClaw WebSocket client and forwards events
-/// as Messages.
+/// Call `org.slate.Rhea.CompleteStream` over D-Bus with the user's prompt.
 ///
-/// On the first iteration, this spawns the WebSocket background loop and
-/// sends an `OpenClawClientReady` message so the app can store the client
-/// handle for sending queries.
-fn openclaw_subscription() -> iced::Subscription<Message> {
-    use iced::futures::SinkExt;
+/// The actual response text arrives as `CompletionChunk` D-Bus signals which
+/// are picked up by `dbus_listener::watch_rhea` and forwarded as
+/// `DbusEvent::RheaChunk` messages. This function only initiates the call and
+/// returns once the method returns (or errors).
+///
+/// A system context string is intentionally left empty here because Rhea
+/// gathers shell context internally (focused window, clipboard, etc.).
+#[cfg(target_os = "linux")]
+async fn call_rhea_complete_stream(prompt: String) -> Result<(), String> {
+    use slate_common::dbus::{RHEA_BUS_NAME, RHEA_INTERFACE, RHEA_PATH};
 
-    let stream = iced::stream::channel(100, |mut output| async move {
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let connection = zbus::Connection::session()
+        .await
+        .map_err(|e| e.to_string())?;
 
-        // Spawn the WebSocket background loop and get a client handle.
-        let client = openclaw::run(event_tx).await;
+    let proxy = zbus::Proxy::new(&connection, RHEA_BUS_NAME, RHEA_PATH, RHEA_INTERFACE)
+        .await
+        .map_err(|e| e.to_string())?;
 
-        // Inform the app that the client handle is ready for sending queries.
-        let _ = output.send(Message::OpenClawClientReady(client)).await;
+    // Empty system prompt -- Rhea supplies its own default.
+    proxy
+        .call_method("CompleteStream", &(prompt.as_str(), ""))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
 
-        // Forward OpenClaw events into the iced message stream.
-        loop {
-            match event_rx.recv().await {
-                Some(event) => {
-                    let msg = Message::OpenClawEvent(event);
-                    // Await back-pressure from the iced runtime.
-                    if output.send(msg).await.is_err() {
-                        tracing::warn!("OpenClaw subscription channel closed");
-                        break;
-                    }
-                }
-                None => {
-                    // Channel closed -- the WebSocket loop ended.
-                    tracing::warn!("OpenClaw event channel closed unexpectedly");
-                    std::future::pending::<()>().await;
-                }
-            }
-        }
-    });
-
-    iced::Subscription::run_with_id("claw-panel-openclaw", stream)
+/// Non-Linux stub: always returns an error so the UI can show a message.
+#[cfg(not(target_os = "linux"))]
+async fn call_rhea_complete_stream(_prompt: String) -> Result<(), String> {
+    Err("Rhea D-Bus is only available on Linux".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -534,256 +497,4 @@ fn main() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_panel_is_hidden() {
-        let panel = ClawPanel::default();
-        assert!(!panel.visible);
-    }
-
-    #[test]
-    fn update_show_sets_visible() {
-        let mut panel = ClawPanel::default();
-        let _ = update_app(&mut panel, Message::Show);
-        assert!(panel.visible);
-    }
-
-    #[test]
-    fn update_hide_clears_visible() {
-        let mut panel = ClawPanel::default();
-        panel.visible = true;
-        let _ = update_app(&mut panel, Message::Hide);
-        assert!(!panel.visible);
-    }
-
-    #[test]
-    fn update_toggle_flips_visibility() {
-        let mut panel = ClawPanel::default();
-        assert!(!panel.visible);
-
-        let _ = update_app(&mut panel, Message::ToggleVisibility);
-        assert!(panel.visible);
-
-        let _ = update_app(&mut panel, Message::ToggleVisibility);
-        assert!(!panel.visible);
-    }
-
-    #[test]
-    fn update_palette_changed_stores_palette() {
-        let mut panel = ClawPanel::default();
-        let new_palette = Palette {
-            primary: [255, 0, 0, 255],
-            ..Palette::default()
-        };
-        let _ = update_app(&mut panel, Message::PaletteChanged(new_palette.clone()));
-        assert_eq!(panel.palette, new_palette);
-    }
-
-    #[test]
-    fn update_input_changed_stores_text() {
-        let mut panel = ClawPanel::default();
-        let _ = update_app(&mut panel, Message::InputChanged("hello".to_string()));
-        assert_eq!(panel.input_text, "hello");
-    }
-
-    #[test]
-    fn update_send_on_empty_input_does_nothing() {
-        let mut panel = ClawPanel::default();
-        panel.input_text = "   ".to_string();
-        let _ = update_app(&mut panel, Message::Send);
-        assert!(panel.conversation.is_empty());
-        assert!(!panel.is_streaming);
-    }
-
-    #[test]
-    fn update_send_without_client_adds_error_message() {
-        let mut panel = ClawPanel::default();
-        panel.input_text = "test query".to_string();
-        let _ = update_app(&mut panel, Message::Send);
-
-        assert_eq!(panel.conversation.len(), 2);
-        assert!(!panel.is_streaming);
-        assert!(panel.input_text.is_empty());
-    }
-
-    #[test]
-    fn update_resize_clamps_width() {
-        let mut panel = ClawPanel::default();
-        let _ = update_app(&mut panel, Message::Resize(100));
-        assert_eq!(panel.panel_width, panel::MIN_WIDTH);
-
-        let _ = update_app(&mut panel, Message::Resize(9999));
-        assert_eq!(panel.panel_width, panel::MAX_WIDTH);
-
-        let _ = update_app(&mut panel, Message::Resize(500));
-        assert_eq!(panel.panel_width, 500);
-    }
-
-    #[test]
-    fn update_dbus_show_sets_visible() {
-        let mut panel = ClawPanel::default();
-        let _ = update_app(
-            &mut panel,
-            Message::DbusEvent(dbus_listener::DbusEvent::Show),
-        );
-        assert!(panel.visible);
-    }
-
-    #[test]
-    fn update_dbus_toggle_flips_visibility() {
-        let mut panel = ClawPanel::default();
-        let _ = update_app(
-            &mut panel,
-            Message::DbusEvent(dbus_listener::DbusEvent::Toggle),
-        );
-        assert!(panel.visible);
-
-        let _ = update_app(
-            &mut panel,
-            Message::DbusEvent(dbus_listener::DbusEvent::Toggle),
-        );
-        assert!(!panel.visible);
-    }
-
-    #[test]
-    fn update_dbus_palette_updates_theme() {
-        let mut panel = ClawPanel::default();
-        let custom = Palette {
-            primary: [0, 255, 0, 255],
-            ..Palette::default()
-        };
-        let _ = update_app(
-            &mut panel,
-            Message::DbusEvent(dbus_listener::DbusEvent::PaletteChanged(custom.clone())),
-        );
-        assert_eq!(panel.palette, custom);
-    }
-
-    #[test]
-    fn update_openclaw_chunk_appends_text() {
-        let mut panel = ClawPanel::default();
-        panel.is_streaming = true;
-        let _ = update_app(
-            &mut panel,
-            Message::OpenClawEvent(ClientEvent::Chunk("hello ".to_string())),
-        );
-        let _ = update_app(
-            &mut panel,
-            Message::OpenClawEvent(ClientEvent::Chunk("world".to_string())),
-        );
-        assert_eq!(panel.conversation.len(), 1);
-        assert_eq!(panel.conversation.messages()[0].content, "hello world");
-    }
-
-    #[test]
-    fn update_openclaw_done_stops_streaming() {
-        let mut panel = ClawPanel::default();
-        panel.is_streaming = true;
-        let _ = update_app(&mut panel, Message::OpenClawEvent(ClientEvent::Done));
-        assert!(!panel.is_streaming);
-    }
-
-    #[test]
-    fn update_openclaw_error_stops_streaming_and_shows_error() {
-        let mut panel = ClawPanel::default();
-        panel.is_streaming = true;
-        let _ = update_app(
-            &mut panel,
-            Message::OpenClawEvent(ClientEvent::Error("timeout".to_string())),
-        );
-        assert!(!panel.is_streaming);
-        assert_eq!(panel.conversation.len(), 1);
-    }
-
-    #[test]
-    fn update_context_updated_stores_context() {
-        let mut panel = ClawPanel::default();
-        let ctx = WindowContext {
-            app_id: "firefox".to_string(),
-            title: "GitHub".to_string(),
-        };
-        let _ = update_app(&mut panel, Message::ContextUpdated(Some(ctx.clone())));
-        assert_eq!(panel.current_context, Some(ctx));
-    }
-
-    #[test]
-    fn update_panel_action_close_hides() {
-        let mut panel = ClawPanel::default();
-        panel.visible = true;
-        let _ = update_app(&mut panel, Message::PanelAction(PanelAction::Close));
-        assert!(!panel.visible);
-    }
-
-    #[test]
-    fn context_poll_interval_is_reasonable() {
-        assert!(
-            CONTEXT_POLL_SECS >= 1 && CONTEXT_POLL_SECS <= 10,
-            "context poll interval should be between 1 and 10 seconds"
-        );
-    }
-
-    #[test]
-    fn update_clipboard_result_ok_shows_success_toast() {
-        let mut panel = ClawPanel::default();
-        let _ = update_app(
-            &mut panel,
-            Message::ClipboardResult(Ok("Copied!".to_string())),
-        );
-        assert!(panel.toast_state.is_visible());
-        let toast = panel.toast_state.current().expect("should have toast");
-        assert_eq!(toast.message, "Copied!");
-        assert_eq!(toast.kind, toast::ToastKind::Success);
-    }
-
-    #[test]
-    fn update_clipboard_result_err_shows_error_toast() {
-        let mut panel = ClawPanel::default();
-        let _ = update_app(
-            &mut panel,
-            Message::ClipboardResult(Err("wl-copy not found".to_string())),
-        );
-        assert!(panel.toast_state.is_visible());
-        let toast = panel.toast_state.current().expect("should have toast");
-        assert_eq!(toast.message, "wl-copy not found");
-        assert_eq!(toast.kind, toast::ToastKind::Error);
-    }
-
-    #[test]
-    fn update_toast_tick_calls_tick() {
-        let mut panel = ClawPanel::default();
-        // Set an already-expired toast
-        panel.toast_state.show_success("Gone".to_string());
-        panel.toast_state = {
-            let mut ts = ToastState::new();
-            ts.show_success("test".to_string());
-            ts
-        };
-        // Toast is visible right after creation
-        assert!(panel.toast_state.is_visible());
-
-        // ToastTick should not remove a non-expired toast
-        let _ = update_app(&mut panel, Message::ToastTick);
-        assert!(panel.toast_state.is_visible());
-    }
-
-    #[test]
-    fn update_apply_code_block_returns_task() {
-        let mut panel = ClawPanel::default();
-        let task = update_app(
-            &mut panel,
-            Message::PanelAction(PanelAction::ApplyCodeBlock("echo hello".to_string())),
-        );
-        // The task should be non-trivial (it performs clipboard copy).
-        // We cannot easily inspect iced::Task internals, but we can
-        // verify the function does not panic.
-        let _ = task;
-    }
-
-    #[test]
-    fn default_panel_has_no_toast() {
-        let panel = ClawPanel::default();
-        assert!(!panel.toast_state.is_visible());
-    }
-}
+mod tests;

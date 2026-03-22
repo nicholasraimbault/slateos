@@ -46,8 +46,9 @@ pub fn view<'a>(
     is_streaming: bool,
     toast_state: &'a ToastState,
     surface_color: [u8; 4],
+    rhea_backend: &'a str,
 ) -> Element<'a, PanelAction> {
-    let header = view_header();
+    let header = view_header(rhea_backend);
     let context_badge = view_context_badge(context);
     let messages = view_messages(conversation);
     let input_bar = view_input_bar(input_text, is_streaming);
@@ -61,10 +62,22 @@ pub fn view<'a>(
         .into()
 }
 
-/// Header row: "Claw" label + close button.
-fn view_header<'a>() -> Element<'a, PanelAction> {
+/// Header row: "Claw" label + active Rhea backend indicator + close button.
+///
+/// The backend name is shown in a small muted label so the user can tell at a
+/// glance whether inference is running locally or in the cloud.
+fn view_header<'a>(rhea_backend: &'a str) -> Element<'a, PanelAction> {
+    let backend_label = if rhea_backend.is_empty() {
+        text("").size(11)
+    } else {
+        text(format!("via {rhea_backend}"))
+            .size(11)
+            .color(Color::from_rgb(0.55, 0.55, 0.55))
+    };
+
     row![
         text("Claw").size(22),
+        backend_label,
         iced::widget::horizontal_space(),
         button(text("X").size(16))
             .on_press(PanelAction::Close)
@@ -186,5 +199,17 @@ mod tests {
         let action = PanelAction::InputChanged("test".to_string());
         let _cloned = action.clone();
         let _debug = format!("{action:?}");
+    }
+
+    #[test]
+    fn view_header_builds_with_empty_backend() {
+        // Ensures the header renders without panicking when no backend is known.
+        let _element = view_header("");
+    }
+
+    #[test]
+    fn view_header_builds_with_backend_name() {
+        // Ensures the backend label is included without panicking.
+        let _element = view_header("local");
     }
 }
