@@ -68,6 +68,19 @@ pub(crate) fn extract_string_hint(
         .and_then(|val| <&str as TryFrom<_>>::try_from(val).ok().map(String::from))
 }
 
+/// Extract a boolean value from the hints dict.
+///
+/// Returns `false` when the key is absent or the value is not a boolean.
+pub(crate) fn extract_bool_hint(
+    hints: &HashMap<String, zbus::zvariant::OwnedValue>,
+    key: &str,
+) -> bool {
+    hints
+        .get(key)
+        .and_then(|val| <bool as TryFrom<_>>::try_from(val).ok())
+        .unwrap_or(false)
+}
+
 /// Determine whether a notification should appear as a heads-up banner.
 pub(crate) fn should_heads_up(urgency: Urgency, dnd: bool) -> bool {
     match urgency {
@@ -219,5 +232,11 @@ mod tests {
     fn should_heads_up_low_never() {
         assert!(!should_heads_up(Urgency::Low, false));
         assert!(!should_heads_up(Urgency::Low, true));
+    }
+
+    #[test]
+    fn extract_bool_hint_absent_returns_false() {
+        let hints: HashMap<String, zbus::zvariant::OwnedValue> = HashMap::new();
+        assert!(!extract_bool_hint(&hints, "suppress-sound"));
     }
 }

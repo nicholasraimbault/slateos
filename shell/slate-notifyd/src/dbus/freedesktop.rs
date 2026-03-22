@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use zbus::object_server::SignalEmitter;
 
 use super::{
-    extract_group_key, extract_string_hint, extract_urgency, parse_actions, should_heads_up,
-    SharedStore, SlateNotificationsSignalEmit,
+    extract_bool_hint, extract_group_key, extract_string_hint, extract_urgency, parse_actions,
+    should_heads_up, SharedStore, SlateNotificationsSignalEmit,
 };
 use crate::history::HistoryWriter;
+use crate::sound::play_notification_sound;
 
 // ---------------------------------------------------------------------------
 // FreedesktopNotifications struct
@@ -24,6 +25,8 @@ pub struct FreedesktopNotifications {
     pub history_dir: PathBuf,
     /// Stored connection for emitting cross-interface signals on the correct path.
     pub connection: zbus::Connection,
+    /// Whether notification sounds are enabled (from NotificationSettings).
+    pub sound_enabled: bool,
 }
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
@@ -39,13 +42,14 @@ impl FreedesktopNotifications {
         body: &str,
         actions: Vec<String>,
         hints: HashMap<String, zbus::zvariant::OwnedValue>,
-        _expire_timeout: i32,
+        expire_timeout: i32,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<u32> {
         let urgency = extract_urgency(&hints);
         let group_key = extract_group_key(&hints);
         let category = extract_string_hint(&hints, "category");
         let desktop_entry = extract_string_hint(&hints, "desktop-entry");
+        let suppress_sound = extract_bool_hint(&hints, "suppress-sound");
 
         let mut store = self.store.write().await;
 
@@ -64,6 +68,8 @@ impl FreedesktopNotifications {
                     updated.category = category;
                     updated.desktop_entry = desktop_entry;
                     updated.heads_up = should_heads_up(urgency, store.dnd);
+                    updated.expire_timeout_ms = expire_timeout;
+                    updated.suppress_sound = suppress_sound;
                     let fd_id = updated.fd_id;
                     let uuid_str = updated.uuid.to_string();
                     let notif_app_name = updated.app_name.clone();
@@ -104,21 +110,25 @@ impl FreedesktopNotifications {
             let uuid_str = uuid.to_string();
             let notif_app_name = app_name.to_string();
 
-            let notification_data = if let Some(n) = store.get_by_uuid(uuid).cloned() {
-                let mut updated = n;
-                updated.app_icon = app_icon.to_string();
-                updated.urgency = urgency;
-                updated.actions = parse_actions(&actions);
-                updated.group_key = group_key;
-                updated.category = category;
-                updated.desktop_entry = desktop_entry;
-                updated.heads_up = should_heads_up(urgency, store.dnd);
-                let data = toml::to_string_pretty(&updated).unwrap_or_default();
-                store.update(updated);
-                data
-            } else {
-                String::new()
-            };
+            let (notification_data, new_urgency, new_suppress_sound) =
+                if let Some(n) = store.get_by_uuid(uuid).cloned() {
+                    let mut updated = n;
+                    updated.app_icon = app_icon.to_string();
+                    updated.urgency = urgency;
+                    updated.actions = parse_actions(&actions);
+                    updated.group_key = group_key;
+                    updated.category = category;
+                    updated.desktop_entry = desktop_entry;
+                    updated.heads_up = should_heads_up(urgency, store.dnd);
+                    updated.expire_timeout_ms = expire_timeout;
+                    updated.suppress_sound = suppress_sound;
+                    let data = toml::to_string_pretty(&updated).unwrap_or_default();
+                    store.update(updated);
+                    (data, urgency, suppress_sound)
+                } else {
+                    (String::new(), urgency, suppress_sound)
+                };
+            let dnd = store.dnd;
             let count = store
                 .get_active()
                 .iter()
@@ -138,6 +148,15 @@ impl FreedesktopNotifications {
                 count,
             )
             .await;
+
+            // Play sound for new notifications (not updates) if conditions are met.
+            if !dnd
+                && new_urgency != slate_common::notifications::Urgency::Low
+                && !new_suppress_sound
+                && self.sound_enabled
+            {
+                play_notification_sound().await;
+            }
 
             // Return replaces_id per spec, not the newly assigned fd_id.
             return Ok(replaces_id);
@@ -159,12 +178,15 @@ impl FreedesktopNotifications {
             updated.category = category;
             updated.desktop_entry = desktop_entry;
             updated.heads_up = should_heads_up(urgency, store.dnd);
+            updated.expire_timeout_ms = expire_timeout;
+            updated.suppress_sound = suppress_sound;
             let data = toml::to_string_pretty(&updated).unwrap_or_default();
             store.update(updated);
             data
         } else {
             String::new()
         };
+        let dnd = store.dnd;
         let count = store
             .get_active()
             .iter()
@@ -185,6 +207,15 @@ impl FreedesktopNotifications {
             count,
         )
         .await;
+
+        // Play sound when a new notification arrives, unless silenced.
+        if !dnd
+            && urgency != slate_common::notifications::Urgency::Low
+            && !suppress_sound
+            && self.sound_enabled
+        {
+            play_notification_sound().await;
+        }
 
         // Silence unused emitter warning — the freedesktop emitter is still needed
         // for the NotificationClosed and ActionInvoked signals defined on this interface.
