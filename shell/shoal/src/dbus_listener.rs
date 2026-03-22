@@ -1,12 +1,16 @@
 /// D-Bus listener for Shoal.
 ///
-/// Subscribes to palette change signals from slate-palette and show/hide
-/// signals from TouchFlow so the dock can re-theme and toggle visibility.
+/// Subscribes to palette change signals from slate-palette, show/hide
+/// signals from TouchFlow, and notification count signals from slate-notifyd
+/// so the dock can re-theme, toggle visibility, and show badge counts.
 use slate_common::Palette;
 
 // D-Bus constants are only used on Linux where we connect to the session bus.
 #[cfg(target_os = "linux")]
-use slate_common::dbus::{DOCK_INTERFACE, DOCK_PATH, PALETTE_BUS_NAME, PALETTE_PATH};
+use slate_common::dbus::{
+    DOCK_INTERFACE, DOCK_PATH, NOTIFICATIONS_BUS_NAME, NOTIFICATIONS_INTERFACE, NOTIFICATIONS_PATH,
+    PALETTE_BUS_NAME, PALETTE_PATH,
+};
 
 /// Events produced by the D-Bus listener for the dock to process.
 #[derive(Debug, Clone)]
@@ -18,6 +22,8 @@ pub enum DockDbusEvent {
     Show,
     /// TouchFlow requested the dock to hide.
     Hide,
+    /// The notification count for an app changed (app_name, count).
+    NotificationCountChanged(String, u32),
 }
 
 /// Subscribe to palette-changed signals and return palette updates.
@@ -111,6 +117,45 @@ pub async fn listen_dock_signals(
     Ok(())
 }
 
+/// Subscribe to GroupChanged signals from slate-notifyd and send count updates.
+///
+/// slate-notifyd emits GroupChanged(app_name, count) whenever a notification is
+/// added, dismissed, or cleared for an app. The dock uses these to update badges.
+#[cfg(target_os = "linux")]
+pub async fn listen_notification_counts(
+    sender: tokio::sync::mpsc::UnboundedSender<DockDbusEvent>,
+) -> anyhow::Result<()> {
+    use zbus::Connection;
+
+    let connection = Connection::session().await?;
+
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(NOTIFICATIONS_BUS_NAME)?
+        .path(NOTIFICATIONS_PATH)?
+        .interface(NOTIFICATIONS_INTERFACE)?
+        .member("GroupChanged")?
+        .build();
+
+    let mut stream = zbus::MessageStream::for_match_rule(rule, &connection, None).await?;
+
+    use iced::futures::StreamExt;
+    while let Some(msg_result) = stream.next().await {
+        let msg = match msg_result {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!("D-Bus notification count message error: {e}");
+                continue;
+            }
+        };
+        if let Ok((app_name, count)) = msg.body().deserialize::<(String, u32)>() {
+            let _ = sender.send(DockDbusEvent::NotificationCountChanged(app_name, count));
+        }
+    }
+
+    Ok(())
+}
+
 /// Try to load the current palette from the running palette daemon.
 #[cfg(target_os = "linux")]
 pub async fn fetch_current_palette() -> anyhow::Result<Palette> {
@@ -145,5 +190,17 @@ mod tests {
 
         let event = DockDbusEvent::PaletteChanged(Palette::default());
         let _ = format!("{event:?}");
+    }
+
+    #[test]
+    fn dock_dbus_event_notification_count_changed_constructible() {
+        let event = DockDbusEvent::NotificationCountChanged("slack".to_string(), 5);
+        let _ = format!("{event:?}");
+        if let DockDbusEvent::NotificationCountChanged(app, count) = event {
+            assert_eq!(app, "slack");
+            assert_eq!(count, 5);
+        } else {
+            panic!("expected NotificationCountChanged");
+        }
     }
 }

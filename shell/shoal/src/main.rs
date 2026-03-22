@@ -11,6 +11,7 @@ mod dock;
 mod magnification;
 mod windows;
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use iced::widget::{column, container, mouse_area, stack, Space};
@@ -67,6 +68,11 @@ struct Shoal {
     menu: Option<MenuState>,
     /// Toast notification overlay state.
     toast_state: ToastState,
+    /// Active notification counts keyed by app_name from slate-notifyd.
+    ///
+    /// Apps with zero notifications are removed rather than stored as 0, so
+    /// absence from the map and presence with count 0 are equivalent.
+    notification_counts: HashMap<String, u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +108,13 @@ enum Message {
     Hide,
     /// Toast expiry tick.
     ToastTick,
+    /// Notification count changed for an app (app_name, count).
+    NotificationCountChanged(String, u32),
+    /// Batch of initial notification counts loaded on startup.
+    InitialNotificationCounts(HashMap<String, u32>),
+    /// D-Bus event forwarded from the dock listener.
+    #[cfg(target_os = "linux")]
+    DockDbusEvent(dbus_listener::DockDbusEvent),
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +145,15 @@ impl Shoal {
                 touch_x: None,
                 menu: None,
                 toast_state: ToastState::new(ToastPosition::BottomCenter),
+                notification_counts: HashMap::new(),
             },
-            Task::none(),
+            // Seed initial notification counts by fetching active notifications
+            // from slate-notifyd on startup. The result is a pre-aggregated map
+            // delivered as a single InitialNotificationCounts message.
+            Task::perform(
+                fetch_initial_notification_counts(),
+                Message::InitialNotificationCounts,
+            ),
         )
     }
 
@@ -243,6 +263,41 @@ impl Shoal {
             Message::ToastTick => {
                 self.toast_state.tick();
             }
+            Message::NotificationCountChanged(app_name, count) => {
+                if app_name.is_empty() {
+                    // Ignore the dummy startup message.
+                } else if count > 0 {
+                    self.notification_counts.insert(app_name, count);
+                } else {
+                    self.notification_counts.remove(&app_name);
+                }
+            }
+            Message::InitialNotificationCounts(counts) => {
+                // Replace the entire map with the freshly fetched state.
+                self.notification_counts = counts;
+            }
+            #[cfg(target_os = "linux")]
+            Message::DockDbusEvent(event) => {
+                use dbus_listener::DockDbusEvent;
+                match event {
+                    DockDbusEvent::PaletteChanged(palette) => {
+                        self.palette = palette;
+                    }
+                    DockDbusEvent::Show => {
+                        self.visible = true;
+                    }
+                    DockDbusEvent::Hide => {
+                        self.visible = false;
+                    }
+                    DockDbusEvent::NotificationCountChanged(app_name, count) => {
+                        if count > 0 {
+                            self.notification_counts.insert(app_name, count);
+                        } else {
+                            self.notification_counts.remove(&app_name);
+                        }
+                    }
+                }
+            }
         }
 
         Task::none()
@@ -259,6 +314,7 @@ impl Shoal {
         let dock = view_dock(
             &pinned_icons,
             &dynamic_icons,
+            &self.notification_counts,
             Message::AppTap,
             Message::AppLongPress,
         );
@@ -314,6 +370,10 @@ impl Shoal {
         if !self.toast_state.is_empty() {
             subs.push(iced::time::every(Duration::from_millis(250)).map(|_| Message::ToastTick));
         }
+
+        // D-Bus subscription: runs exactly once (stable ID) for the app lifetime.
+        #[cfg(target_os = "linux")]
+        subs.push(dbus_subscription());
 
         Subscription::batch(subs)
     }
@@ -423,6 +483,135 @@ fn icon_for_menu<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// D-Bus helpers
+// ---------------------------------------------------------------------------
+
+/// Fetch active notifications from slate-notifyd and aggregate counts per app.
+///
+/// This runs once on startup to pre-populate badge counts before any
+/// GroupChanged signals arrive. On non-Linux targets it returns an empty map.
+async fn fetch_initial_notification_counts() -> HashMap<String, u32> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        HashMap::new()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        fetch_initial_notification_counts_linux().await
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn fetch_initial_notification_counts_linux() -> HashMap<String, u32> {
+    use slate_common::dbus::{NOTIFICATIONS_BUS_NAME, NOTIFICATIONS_INTERFACE, NOTIFICATIONS_PATH};
+    use slate_common::notifications::Notification;
+
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("shoal: could not connect to session bus for initial counts: {e}");
+            return HashMap::new();
+        }
+    };
+
+    let proxy = match zbus::Proxy::new(
+        &conn,
+        NOTIFICATIONS_BUS_NAME,
+        NOTIFICATIONS_PATH,
+        NOTIFICATIONS_INTERFACE,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("shoal: could not create notifications proxy: {e}");
+            return HashMap::new();
+        }
+    };
+
+    let toml_str: String = match proxy.call("GetActive", &()).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("shoal: GetActive call failed: {e}");
+            return HashMap::new();
+        }
+    };
+
+    // The response is a TOML document with a top-level `notifications` array.
+    #[derive(serde::Deserialize)]
+    struct Wrapper {
+        #[serde(default)]
+        notifications: Vec<Notification>,
+    }
+
+    let wrapper: Wrapper = match toml::from_str(&toml_str) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("shoal: failed to parse GetActive TOML: {e}");
+            return HashMap::new();
+        }
+    };
+
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for n in wrapper.notifications {
+        *counts.entry(n.app_name.clone()).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// D-Bus subscription that spawns all dock listeners and forwards events.
+///
+/// Uses a stable subscription ID so iced creates it exactly once.
+#[cfg(target_os = "linux")]
+fn dbus_subscription() -> Subscription<Message> {
+    use iced::futures::SinkExt;
+
+    let stream = iced::stream::channel(50, |mut output| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<dbus_listener::DockDbusEvent>();
+
+        // Spawn one task per signal source. If one fails the others continue.
+        let tx_palette = tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = dbus_listener::listen_palette(tx_palette).await {
+                tracing::warn!("shoal: palette listener ended: {e}");
+            }
+        });
+
+        let tx_dock = tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = dbus_listener::listen_dock_signals(tx_dock).await {
+                tracing::warn!("shoal: dock signal listener ended: {e}");
+            }
+        });
+
+        let tx_notif = tx;
+        tokio::spawn(async move {
+            if let Err(e) = dbus_listener::listen_notification_counts(tx_notif).await {
+                tracing::warn!("shoal: notification count listener ended: {e}");
+            }
+        });
+
+        loop {
+            match rx.recv().await {
+                Some(event) => {
+                    let msg = Message::DockDbusEvent(event);
+                    if output.send(msg).await.is_err() {
+                        tracing::warn!("shoal: D-Bus subscription channel closed");
+                        break;
+                    }
+                }
+                None => {
+                    tracing::warn!("shoal: D-Bus event channel closed unexpectedly");
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    });
+
+    Subscription::run_with_id("shoal-dbus", stream)
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -525,6 +714,7 @@ impl Clone for Shoal {
             touch_x: self.touch_x,
             menu: self.menu.clone(),
             toast_state: self.toast_state.clone(),
+            notification_counts: self.notification_counts.clone(),
         }
     }
 }

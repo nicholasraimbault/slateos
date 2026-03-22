@@ -1,9 +1,11 @@
 /// Dock UI for Shoal.
 ///
 /// Renders the horizontal dock bar with pinned and running app icons,
-/// magnification effects, and running/focused indicators. Uses iced widgets
-/// for layout and styling.
-use iced::widget::{button, column, container, text, Row, Space};
+/// magnification effects, running/focused indicators, and notification badges.
+/// Uses iced widgets for layout and styling.
+use std::collections::HashMap;
+
+use iced::widget::{button, column, container, stack, text, Row, Space};
 use iced::{Alignment, Color, Element, Length, Padding};
 
 use crate::desktop::DesktopEntry;
@@ -123,9 +125,35 @@ fn app_ids_match(app_id: &str, entry: &DesktopEntry) -> bool {
     app_id.eq_ignore_ascii_case(&entry.desktop_id)
 }
 
+/// Determine the badge count for a dock icon by matching against notification counts.
+///
+/// First tries an exact match on `desktop_id`, then falls back to a
+/// case-insensitive match on the last dot-separated component (the "stem"),
+/// so that `org.gnome.Nautilus` matches a notification from app "Nautilus".
+pub fn get_badge_count(icon: &DockIcon, counts: &HashMap<String, u32>) -> u32 {
+    if let Some(&count) = counts.get(&icon.entry.desktop_id) {
+        return count;
+    }
+    let stem = icon
+        .entry
+        .desktop_id
+        .rsplit('.')
+        .next()
+        .unwrap_or(&icon.entry.desktop_id);
+    for (app_name, &count) in counts {
+        if app_name.eq_ignore_ascii_case(stem) {
+            return count;
+        }
+    }
+    0
+}
+
 /// Render a single dock icon as an iced Element.
+///
+/// `badge_count` is the number of unread notifications to overlay; 0 means no badge.
 pub fn view_icon<'a, M: Clone + 'a>(
     icon: &DockIcon,
+    badge_count: u32,
     on_tap: M,
     _on_long_press: M,
 ) -> Element<'a, M> {
@@ -155,6 +183,48 @@ pub fn view_icon<'a, M: Clone + 'a>(
         ..Default::default()
     });
 
+    // Badge overlay: a small red circle in the top-right corner with count text.
+    // Rendered only when count > 0 so the layout is unchanged for clean icons.
+    let icon_with_badge: Element<'a, M> = if badge_count > 0 {
+        let badge_size = (size * 0.38).max(14.0);
+        let badge_label = if badge_count > 99 {
+            "99+".to_string()
+        } else {
+            badge_count.to_string()
+        };
+        let badge = container(
+            text(badge_label)
+                .size(badge_size * 0.55)
+                .color(Color::WHITE)
+                .align_x(iced::alignment::Horizontal::Center),
+        )
+        .width(Length::Fixed(badge_size))
+        .height(Length::Fixed(badge_size))
+        .center_x(Length::Fixed(badge_size))
+        .center_y(Length::Fixed(badge_size))
+        .style(move |_theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(Color::from_rgb(0.94, 0.19, 0.19))),
+            border: iced::Border {
+                radius: (badge_size / 2.0).into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        // Stack the badge on top of the icon, aligned to the top-right corner.
+        stack![
+            icon_content,
+            container(badge)
+                .width(Length::Fixed(size))
+                .height(Length::Fixed(size))
+                .align_right(Length::Fixed(size))
+                .align_top(Length::Fixed(size))
+        ]
+        .into()
+    } else {
+        icon_content.into()
+    };
+
     // Running indicator dot
     let indicator: Element<'a, M> = if icon.is_running {
         let dot_color = if icon.is_focused {
@@ -177,7 +247,7 @@ pub fn view_icon<'a, M: Clone + 'a>(
         Space::new(4, 4).into()
     };
 
-    let col = column![icon_content, indicator]
+    let col = column![icon_with_badge, indicator]
         .spacing(2)
         .align_x(Alignment::Center);
 
@@ -214,6 +284,7 @@ pub fn view_separator<'a, M: 'a>() -> Element<'a, M> {
 pub fn view_dock<'a, M: Clone + 'a>(
     pinned_icons: &[DockIcon],
     dynamic_icons: &[DockIcon],
+    notification_counts: &HashMap<String, u32>,
     make_tap_msg: impl Fn(String) -> M,
     make_long_press_msg: impl Fn(String) -> M,
 ) -> Element<'a, M> {
@@ -223,7 +294,13 @@ pub fn view_dock<'a, M: Clone + 'a>(
     for icon in pinned_icons {
         let id = icon.entry.desktop_id.clone();
         let id2 = id.clone();
-        dock_row = dock_row.push(view_icon(icon, make_tap_msg(id), make_long_press_msg(id2)));
+        let badge = get_badge_count(icon, notification_counts);
+        dock_row = dock_row.push(view_icon(
+            icon,
+            badge,
+            make_tap_msg(id),
+            make_long_press_msg(id2),
+        ));
     }
 
     // Separator (only if there are dynamic icons)
@@ -233,7 +310,13 @@ pub fn view_dock<'a, M: Clone + 'a>(
         for icon in dynamic_icons {
             let id = icon.entry.desktop_id.clone();
             let id2 = id.clone();
-            dock_row = dock_row.push(view_icon(icon, make_tap_msg(id), make_long_press_msg(id2)));
+            let badge = get_badge_count(icon, notification_counts);
+            dock_row = dock_row.push(view_icon(
+                icon,
+                badge,
+                make_tap_msg(id),
+                make_long_press_msg(id2),
+            ));
         }
     }
 
@@ -333,5 +416,79 @@ mod tests {
         assert!(app_ids_match("alacritty", &entry));
         assert!(app_ids_match("ALACRITTY", &entry));
         assert!(!app_ids_match("firefox", &entry));
+    }
+
+    fn make_icon(desktop_id: &str) -> DockIcon {
+        DockIcon {
+            entry: DesktopEntry {
+                name: desktop_id.to_string(),
+                exec: desktop_id.to_lowercase(),
+                icon: String::new(),
+                desktop_id: desktop_id.to_string(),
+            },
+            is_running: false,
+            is_focused: false,
+            is_pinned: true,
+            scale: 1.0,
+        }
+    }
+
+    #[test]
+    fn get_badge_count_exact_match() {
+        let icon = make_icon("slack");
+        let mut counts = HashMap::new();
+        counts.insert("slack".to_string(), 7);
+        assert_eq!(get_badge_count(&icon, &counts), 7);
+    }
+
+    #[test]
+    fn get_badge_count_no_match_returns_zero() {
+        let icon = make_icon("firefox");
+        let mut counts = HashMap::new();
+        counts.insert("slack".to_string(), 3);
+        assert_eq!(get_badge_count(&icon, &counts), 0);
+    }
+
+    #[test]
+    fn get_badge_count_empty_counts_returns_zero() {
+        let icon = make_icon("firefox");
+        let counts = HashMap::new();
+        assert_eq!(get_badge_count(&icon, &counts), 0);
+    }
+
+    #[test]
+    fn get_badge_count_stem_fallback_case_insensitive() {
+        // desktop_id "org.gnome.Nautilus" should match notification app "Nautilus"
+        let icon = make_icon("org.gnome.Nautilus");
+        let mut counts = HashMap::new();
+        counts.insert("nautilus".to_string(), 2);
+        assert_eq!(get_badge_count(&icon, &counts), 2);
+    }
+
+    #[test]
+    fn get_badge_count_stem_fallback_mixed_case() {
+        let icon = make_icon("com.example.MyApp");
+        let mut counts = HashMap::new();
+        counts.insert("MYAPP".to_string(), 5);
+        assert_eq!(get_badge_count(&icon, &counts), 5);
+    }
+
+    #[test]
+    fn get_badge_count_exact_match_takes_priority_over_stem() {
+        // When both exact and stem match exist, exact should win
+        let icon = make_icon("com.slack.Slack");
+        let mut counts = HashMap::new();
+        counts.insert("com.slack.Slack".to_string(), 10);
+        counts.insert("Slack".to_string(), 3);
+        assert_eq!(get_badge_count(&icon, &counts), 10);
+    }
+
+    #[test]
+    fn get_badge_count_simple_id_no_dots() {
+        // desktop_id with no dots: stem equals desktop_id itself
+        let icon = make_icon("firefox");
+        let mut counts = HashMap::new();
+        counts.insert("Firefox".to_string(), 4);
+        assert_eq!(get_badge_count(&icon, &counts), 4);
     }
 }
