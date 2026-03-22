@@ -36,10 +36,12 @@ pub enum DbusEvent {
     NotificationDismissed(Uuid),
     /// A notification group's count changed (app_name, new_count).
     GroupChanged(String, u32),
-    /// Rhea produced a summary for a group key.
-    AiSummaryReady(String, String),
-    /// Rhea produced smart-reply options for a notification.
-    SmartRepliesReady(Uuid, Vec<String>),
+    /// Rhea emitted a streaming text chunk during a completion.
+    RheaCompletionChunk(String),
+    /// Rhea finished a completion — full text payload.
+    RheaCompletionDone(String),
+    /// Rhea reported an error during a completion.
+    RheaCompletionError(String),
     /// An edge gesture phase/progress/velocity update from TouchFlow.
     EdgeGesture {
         phase: String,
@@ -200,8 +202,9 @@ async fn watch_notifications(
 
 /// Subscribe to org.slate.Rhea signals: CompletionChunk, CompletionDone, CompletionError.
 ///
-/// Rhea carries the notification group_key and generated text so the shade
-/// can display AI summaries and smart-reply suggestions.
+/// The shade calls Summarize / SuggestReplies on Rhea via D-Bus method calls; results
+/// come back through these completion signals. CompletionDone carries the full text
+/// of the completed response, which the shade uses to update AI summaries.
 #[cfg(target_os = "linux")]
 async fn watch_rhea(
     conn: zbus::Connection,
@@ -211,25 +214,28 @@ async fn watch_rhea(
 
     let proxy = zbus::Proxy::new(&conn, RHEA_BUS_NAME, RHEA_PATH, RHEA_INTERFACE).await?;
 
-    let mut summary = proxy.receive_signal("SummaryReady").await?;
-    let mut replies = proxy.receive_signal("SmartRepliesReady").await?;
+    let mut chunk_stream = proxy.receive_signal("CompletionChunk").await?;
+    let mut done_stream = proxy.receive_signal("CompletionDone").await?;
+    let mut error_stream = proxy.receive_signal("CompletionError").await?;
 
     loop {
         tokio::select! {
-            Some(signal) = summary.next() => {
-                // Body: (group_key: &str, summary: &str)
-                if let Ok((group_key, text)) = signal.body().deserialize::<(String, String)>() {
-                    let _ = tx.send(DbusEvent::AiSummaryReady(group_key, text));
+            Some(signal) = chunk_stream.next() => {
+                // Body: chunk: &str
+                if let Ok(chunk) = signal.body().deserialize::<String>() {
+                    let _ = tx.send(DbusEvent::RheaCompletionChunk(chunk));
                 }
             }
-            Some(signal) = replies.next() => {
-                // Body: (uuid: &str, replies: Vec<String>)
-                if let Ok((uuid_str, options)) =
-                    signal.body().deserialize::<(String, Vec<String>)>()
-                {
-                    if let Ok(uuid) = Uuid::parse_str(&uuid_str) {
-                        let _ = tx.send(DbusEvent::SmartRepliesReady(uuid, options));
-                    }
+            Some(signal) = done_stream.next() => {
+                // Body: full_text: &str
+                if let Ok(full_text) = signal.body().deserialize::<String>() {
+                    let _ = tx.send(DbusEvent::RheaCompletionDone(full_text));
+                }
+            }
+            Some(signal) = error_stream.next() => {
+                // Body: error: &str
+                if let Ok(error) = signal.body().deserialize::<String>() {
+                    let _ = tx.send(DbusEvent::RheaCompletionError(error));
                 }
             }
             else => break,
@@ -339,20 +345,25 @@ mod tests {
     }
 
     #[test]
-    fn dbus_event_ai_summary_constructible() {
-        let event = DbusEvent::AiSummaryReady("group-key".to_string(), "summary text".to_string());
-        assert!(matches!(event, DbusEvent::AiSummaryReady(_, _)));
+    fn dbus_event_rhea_completion_chunk_constructible() {
+        let event = DbusEvent::RheaCompletionChunk("partial text".to_string());
+        assert!(matches!(event, DbusEvent::RheaCompletionChunk(_)));
     }
 
     #[test]
-    fn dbus_event_smart_replies_constructible() {
-        let uuid = Uuid::new_v4();
-        let event = DbusEvent::SmartRepliesReady(uuid, vec!["Yes".to_string(), "No".to_string()]);
-        if let DbusEvent::SmartRepliesReady(_, replies) = event {
-            assert_eq!(replies.len(), 2);
+    fn dbus_event_rhea_completion_done_constructible() {
+        let event = DbusEvent::RheaCompletionDone("full response".to_string());
+        if let DbusEvent::RheaCompletionDone(text) = event {
+            assert_eq!(text, "full response");
         } else {
-            panic!("expected SmartRepliesReady");
+            panic!("expected RheaCompletionDone");
         }
+    }
+
+    #[test]
+    fn dbus_event_rhea_completion_error_constructible() {
+        let event = DbusEvent::RheaCompletionError("something failed".to_string());
+        assert!(matches!(event, DbusEvent::RheaCompletionError(_)));
     }
 
     #[cfg(any(target_os = "linux", test))]

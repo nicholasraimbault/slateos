@@ -16,6 +16,7 @@ mod layout;
 mod notifications;
 mod quick_settings;
 mod shade;
+mod update;
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -25,10 +26,7 @@ use iced::{Element, Subscription, Task, Theme};
 
 use heads_up::{HeadsUp, HeadsUpAction};
 use layout::{detect_layout, LayoutMode};
-use notifications::{
-    remove_group, remove_notification, set_ai_summary, toggle_group, upsert_notification,
-    NotifAction, NotificationGroup,
-};
+use notifications::{NotifAction, NotificationGroup};
 use quick_settings::{QsAction, QuickSettingsState};
 use shade::{ShadeAction, ShadeAnimState};
 use slate_common::theme::create_theme;
@@ -115,131 +113,6 @@ enum Message {
     AnimTick,
     // HUN auto-dismiss tick
     HunTick,
-}
-
-// ---------------------------------------------------------------------------
-// Update
-// ---------------------------------------------------------------------------
-
-fn update_app(app: &mut SlateShade, message: Message) -> Task<Message> {
-    match message {
-        Message::DbusEvent(event) => handle_dbus_event(app, event),
-        Message::Open => {
-            app.anim.open();
-        }
-        Message::Close => {
-            app.anim.close();
-        }
-        Message::NotifAction(action) => handle_notif_action(app, action),
-        Message::QsAction(action) => handle_qs_action(app, action),
-        Message::HeadsUpAction(action) => handle_hun_action(app, action),
-        Message::AnimTick => {
-            if !app.anim.is_settled() {
-                app.anim.step(ANIM_TICK_MS as f64 / 1000.0);
-            }
-        }
-        Message::HunTick => {
-            app.hun.tick();
-        }
-    }
-    Task::none()
-}
-
-fn handle_dbus_event(app: &mut SlateShade, event: dbus_listener::DbusEvent) {
-    match event {
-        dbus_listener::DbusEvent::NotificationAdded(notif) => {
-            if notif.heads_up {
-                app.hun.show(notif.clone());
-            }
-            upsert_notification(&mut app.groups, notif);
-        }
-        dbus_listener::DbusEvent::NotificationUpdated(notif) => {
-            upsert_notification(&mut app.groups, notif);
-        }
-        dbus_listener::DbusEvent::NotificationDismissed(uuid) => {
-            remove_notification(&mut app.groups, uuid);
-            app.smart_replies.remove(&uuid);
-        }
-        dbus_listener::DbusEvent::GroupChanged(app_name, count) => {
-            if count == 0 {
-                remove_group(&mut app.groups, &app_name);
-            }
-        }
-        dbus_listener::DbusEvent::AiSummaryReady(group_key, summary) => {
-            set_ai_summary(&mut app.groups, &group_key, summary);
-        }
-        dbus_listener::DbusEvent::SmartRepliesReady(uuid, replies) => {
-            app.smart_replies.insert(uuid, replies);
-        }
-        dbus_listener::DbusEvent::EdgeGesture {
-            phase,
-            progress,
-            velocity,
-        } => match phase.as_str() {
-            "begin" | "update" => {
-                app.anim.set_from_gesture(progress, velocity);
-            }
-            "end" => {
-                app.anim.set_from_gesture(progress, velocity);
-                app.anim.commit_gesture();
-            }
-            "cancel" => {
-                app.anim.close();
-            }
-            _ => {}
-        },
-        dbus_listener::DbusEvent::PaletteChanged(palette) => {
-            app.palette = palette;
-        }
-    }
-}
-
-fn handle_notif_action(app: &mut SlateShade, action: NotifAction) {
-    match action {
-        NotifAction::Dismiss(uuid) => {
-            remove_notification(&mut app.groups, uuid);
-            app.smart_replies.remove(&uuid);
-            // D-Bus dismiss call would go here in a full implementation.
-        }
-        NotifAction::DismissGroup(app_name) => {
-            remove_group(&mut app.groups, &app_name);
-        }
-        NotifAction::ToggleGroup(app_name) => {
-            toggle_group(&mut app.groups, &app_name);
-        }
-        NotifAction::InvokeAction(_uuid, _key) => {
-            // D-Bus invoke_action call would go here.
-        }
-        NotifAction::SendReply(_uuid, _reply) => {
-            // Smart reply dispatch would go here.
-        }
-    }
-}
-
-fn handle_qs_action(app: &mut SlateShade, action: QsAction) {
-    match action {
-        QsAction::TileToggled(kind) => {
-            app.qs.toggle_tile(kind);
-        }
-        QsAction::BrightnessChanged(v) => {
-            app.qs.set_brightness(v);
-        }
-        QsAction::VolumeChanged(v) => {
-            app.qs.set_volume(v);
-        }
-    }
-}
-
-fn handle_hun_action(app: &mut SlateShade, action: HeadsUpAction) {
-    match action {
-        HeadsUpAction::Dismiss => {
-            app.hun.dismiss();
-        }
-        HeadsUpAction::InvokeAction(_uuid, _key) => {
-            app.hun.dismiss();
-            // D-Bus invoke_action call would go here.
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +220,7 @@ impl iced_layershell::Application for SlateShade {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        update_app(self, message)
+        update::update_app(self, message)
     }
 
     fn view(&self) -> Element<'_, Message, Theme, iced::Renderer> {
@@ -374,7 +247,7 @@ impl SlateShade {
     }
 
     fn update_iced(&mut self, message: Message) -> Task<Message> {
-        update_app(self, message)
+        update::update_app(self, message)
     }
 
     fn view_iced(&self) -> Element<'_, Message> {
@@ -448,276 +321,5 @@ fn run_app() -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use slate_common::notifications::Notification;
-
-    fn make_notif(app: &str) -> Notification {
-        Notification::new(1, app, "Subject", "Body")
-    }
-
-    #[test]
-    fn slate_shade_default_has_empty_groups() {
-        let s = SlateShade::default();
-        assert!(s.groups.is_empty());
-    }
-
-    #[test]
-    fn slate_shade_default_shade_is_closed() {
-        let s = SlateShade::default();
-        assert!(!s.anim.is_open());
-    }
-
-    #[test]
-    fn slate_shade_open_message_sets_target() {
-        let mut s = SlateShade::default();
-        let _ = update_app(&mut s, Message::Open);
-        assert!((s.anim.target - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn slate_shade_close_message_sets_target_zero() {
-        let mut s = SlateShade::default();
-        s.anim.open();
-        let _ = update_app(&mut s, Message::Close);
-        assert!((s.anim.target - 0.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn slate_shade_notification_added_via_dbus() {
-        let mut s = SlateShade::default();
-        let notif = make_notif("TestApp");
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationAdded(notif)),
-        );
-        assert_eq!(s.groups.len(), 1);
-        assert_eq!(s.groups[0].app_name, "TestApp");
-    }
-
-    #[test]
-    fn slate_shade_notification_dismissed_via_dbus() {
-        let mut s = SlateShade::default();
-        let notif = make_notif("App");
-        let uuid = notif.uuid;
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationAdded(notif)),
-        );
-        assert_eq!(s.groups.len(), 1);
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationDismissed(uuid)),
-        );
-        assert!(s.groups.is_empty());
-    }
-
-    #[test]
-    fn slate_shade_palette_changed_via_dbus() {
-        let mut s = SlateShade::default();
-        let new_palette = Palette {
-            primary: [255, 0, 0, 255],
-            ..Palette::default()
-        };
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::PaletteChanged(
-                new_palette.clone(),
-            )),
-        );
-        assert_eq!(s.palette, new_palette);
-    }
-
-    #[test]
-    fn slate_shade_qs_tile_toggle() {
-        let mut s = SlateShade::default();
-        let kind = quick_settings::TileKind::WiFi;
-        let _ = update_app(&mut s, Message::QsAction(QsAction::TileToggled(kind)));
-        assert!(s.qs.tiles.iter().find(|t| t.kind == kind).unwrap().active);
-    }
-
-    #[test]
-    fn slate_shade_qs_brightness_changed() {
-        let mut s = SlateShade::default();
-        let _ = update_app(&mut s, Message::QsAction(QsAction::BrightnessChanged(0.3)));
-        assert!((s.qs.brightness - 0.3).abs() < 1e-4);
-    }
-
-    #[test]
-    fn slate_shade_hun_dismissed_by_action() {
-        let mut s = SlateShade::default();
-        let notif = {
-            let mut n = make_notif("App");
-            n.heads_up = true;
-            n
-        };
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationAdded(notif)),
-        );
-        assert!(s.hun.is_visible());
-        let _ = update_app(&mut s, Message::HeadsUpAction(HeadsUpAction::Dismiss));
-        assert!(!s.hun.is_visible());
-    }
-
-    #[test]
-    fn slate_shade_edge_gesture_begin_sets_position() {
-        let mut s = SlateShade::default();
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::EdgeGesture {
-                phase: "begin".to_string(),
-                progress: 0.4,
-                velocity: 100.0,
-            }),
-        );
-        assert!((s.anim.position - 0.4).abs() < 1e-9);
-    }
-
-    #[test]
-    fn slate_shade_edge_gesture_end_commits() {
-        let mut s = SlateShade::default();
-        // A progress >= 0.5 should commit to open.
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::EdgeGesture {
-                phase: "end".to_string(),
-                progress: 0.6,
-                velocity: 0.0,
-            }),
-        );
-        assert!((s.anim.target - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn slate_shade_edge_gesture_cancel_closes() {
-        let mut s = SlateShade::default();
-        s.anim.open();
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::EdgeGesture {
-                phase: "cancel".to_string(),
-                progress: 0.5,
-                velocity: 0.0,
-            }),
-        );
-        assert!((s.anim.target - 0.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn slate_shade_group_changed_zero_removes_group() {
-        let mut s = SlateShade::default();
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationAdded(make_notif(
-                "App",
-            ))),
-        );
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::GroupChanged("App".to_string(), 0)),
-        );
-        assert!(s.groups.is_empty());
-    }
-
-    #[test]
-    fn slate_shade_ai_summary_sets_on_group() {
-        let mut s = SlateShade::default();
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationAdded(make_notif(
-                "App",
-            ))),
-        );
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::AiSummaryReady(
-                "App".to_string(),
-                "Summary text".to_string(),
-            )),
-        );
-        assert_eq!(s.groups[0].ai_summary.as_deref(), Some("Summary text"));
-    }
-
-    #[test]
-    fn anim_tick_steps_animation() {
-        let mut s = SlateShade::default();
-        s.anim.open();
-        let pos_before = s.anim.position;
-        let _ = update_app(&mut s, Message::AnimTick);
-        // After one tick toward target=1.0 position should have increased.
-        assert!(s.anim.position >= pos_before);
-    }
-
-    #[test]
-    fn hun_tick_removes_expired_banner() {
-        let mut s = SlateShade::default();
-        let state = heads_up::HeadsUpState::with_duration(make_notif("App"), Duration::ZERO);
-        s.hun.active = Some(state);
-        let _ = update_app(&mut s, Message::HunTick);
-        assert!(!s.hun.is_visible());
-    }
-
-    #[test]
-    fn notif_action_dismiss_removes_from_groups() {
-        let mut s = SlateShade::default();
-        let notif = make_notif("App");
-        let uuid = notif.uuid;
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationAdded(notif)),
-        );
-        let _ = update_app(&mut s, Message::NotifAction(NotifAction::Dismiss(uuid)));
-        assert!(s.groups.is_empty());
-    }
-
-    #[test]
-    fn notif_action_dismiss_group_removes_all() {
-        let mut s = SlateShade::default();
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationAdded(make_notif(
-                "App",
-            ))),
-        );
-        let _ = update_app(
-            &mut s,
-            Message::NotifAction(NotifAction::DismissGroup("App".to_string())),
-        );
-        assert!(s.groups.is_empty());
-    }
-
-    #[test]
-    fn smart_replies_stored_on_event() {
-        let mut s = SlateShade::default();
-        let notif = make_notif("App");
-        let uuid = notif.uuid;
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::SmartRepliesReady(
-                uuid,
-                vec!["Yes".to_string()],
-            )),
-        );
-        assert_eq!(s.smart_replies[&uuid], vec!["Yes"]);
-    }
-
-    #[test]
-    fn smart_replies_cleared_on_dismiss() {
-        let mut s = SlateShade::default();
-        let notif = make_notif("App");
-        let uuid = notif.uuid;
-        s.smart_replies.insert(uuid, vec!["OK".to_string()]);
-        let _ = update_app(
-            &mut s,
-            Message::DbusEvent(dbus_listener::DbusEvent::NotificationDismissed(uuid)),
-        );
-        assert!(!s.smart_replies.contains_key(&uuid));
-    }
-
-    #[test]
-    fn default_layout_uses_configured_width() {
-        let s = SlateShade::default();
-        assert_eq!(s.layout, layout::detect_layout(DEFAULT_SCREEN_WIDTH));
-    }
-}
+#[path = "main_tests.rs"]
+mod tests;
