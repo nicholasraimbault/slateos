@@ -15,6 +15,7 @@ pub const PALETTE_BUS_NAME: &str = "org.slate.Palette";
 // ---------------------------------------------------------------------------
 pub const TOUCHFLOW_INTERFACE: &str = "org.slate.TouchFlow";
 pub const TOUCHFLOW_PATH: &str = "/org/slate/TouchFlow";
+pub const TOUCHFLOW_BUS_NAME: &str = "org.slate.TouchFlow";
 
 // ---------------------------------------------------------------------------
 // Dock (shoal)
@@ -151,5 +152,10 @@ mod tests {
     #[test]
     fn notifications_bus_name_matches_interface() {
         assert_eq!(NOTIFICATIONS_BUS_NAME, NOTIFICATIONS_INTERFACE);
+    }
+
+    #[test]
+    fn touchflow_bus_name_matches_interface() {
+        assert_eq!(TOUCHFLOW_BUS_NAME, TOUCHFLOW_INTERFACE);
     }
 }

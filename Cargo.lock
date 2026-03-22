@@ -4195,6 +4195,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "slate-shade"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "iced",
+ "iced_layershell",
+ "slate-common",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zbus 5.14.0",
+]
+
+[[package]]
 name = "slate-suggest"
 version = "0.1.0"
 dependencies = [
