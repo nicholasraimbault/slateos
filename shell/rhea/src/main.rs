@@ -3,6 +3,10 @@
 /// Loads configuration from settings.toml, creates the appropriate backend
 /// via the Router, registers the org.slate.Rhea D-Bus interface, and runs
 /// the event loop until SIGINT/SIGTERM.
+///
+/// Model lifecycle signals (ModelLoaded, ModelUnloaded) are wired via mpsc
+/// channels: the LocalBackend sends on them on state transitions, and a
+/// background task emits the corresponding D-Bus signals.
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -54,9 +58,15 @@ async fn main() -> Result<()> {
 
     info!(backend = %backend_name, "initializing router");
 
-    let router = Router::from_config(&config)
-        .await
-        .context("failed to create router")?;
+    // Create signal notification channels before building the router so the
+    // LocalBackend can hold senders while we hold receivers for the listener tasks.
+    let (model_loaded_tx, mut model_loaded_rx) = tokio::sync::mpsc::channel::<String>(8);
+    let (model_unloaded_tx, mut model_unloaded_rx) = tokio::sync::mpsc::channel::<String>(8);
+
+    let router =
+        Router::from_config_with_signals(&config, Some(model_loaded_tx), Some(model_unloaded_tx))
+            .await
+            .context("failed to create router")?;
 
     let shared_router = Arc::new(RwLock::new(router));
 
@@ -80,6 +90,43 @@ async fn main() -> Result<()> {
         .context("failed to acquire org.slate.Rhea bus name")?;
 
     info!("org.slate.Rhea registered, waiting for requests");
+
+    // Spawn a task that listens for ModelLoaded notifications and emits the
+    // corresponding D-Bus signal. The SignalEmitter is created from the
+    // connection pointing at the registered Rhea object path.
+    {
+        let conn = conn.clone();
+        tokio::spawn(async move {
+            while let Some(model_path) = model_loaded_rx.recv().await {
+                if let Ok(emitter) =
+                    zbus::object_server::SignalEmitter::new(&conn, slate_common::dbus::RHEA_PATH)
+                {
+                    let _ = RheaInterface::model_loaded(&emitter, &model_path).await;
+                    info!(model = %model_path, "emitted ModelLoaded signal");
+                }
+            }
+        });
+    }
+
+    // Spawn a task that listens for ModelUnloaded notifications and emits the
+    // corresponding D-Bus signal.
+    {
+        let conn = conn.clone();
+        tokio::spawn(async move {
+            while let Some(model_path) = model_unloaded_rx.recv().await {
+                if let Ok(emitter) =
+                    zbus::object_server::SignalEmitter::new(&conn, slate_common::dbus::RHEA_PATH)
+                {
+                    let _ = RheaInterface::model_unloaded(&emitter, &model_path).await;
+                    info!(model = %model_path, "emitted ModelUnloaded signal");
+                }
+            }
+        });
+    }
+
+    // BackendChanged: emitted if the active backend changes at runtime.
+    // Runtime reconfiguration is not yet implemented; this signal is reserved
+    // for a future hot-swap feature. See: TODO(backend-switch)
 
     // Graceful shutdown on SIGINT (ctrl-c) or SIGTERM (arkhe stop).
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

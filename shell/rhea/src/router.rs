@@ -3,6 +3,7 @@
 /// `Router::from_config` instantiates the correct backend based on the
 /// config's `BackendKind`. A `StubBackend` is provided for tests.
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 use tracing::info;
 
 use slate_common::ai::{
@@ -84,13 +85,33 @@ impl Router {
     ///
     /// For `BackendKind::Local`, a `LocalBackend` is created and its idle timer is spawned.
     /// For `BackendKind::Cloud`, a `CloudBackend` is created.
+    ///
+    /// Used in tests and as a convenience for call-sites that don't need signals.
+    #[allow(dead_code)]
     pub async fn from_config(config: &RheaConfig) -> anyhow::Result<Self> {
+        Self::from_config_with_signals(config, None, None).await
+    }
+
+    /// Like `from_config` but wires optional signal senders into the local backend.
+    ///
+    /// `model_loaded_tx` fires (with the model path) when Cold→Warm transitions.
+    /// `model_unloaded_tx` fires (with the model path) when Warm→Cold transitions.
+    /// Both channels are ignored for the cloud backend.
+    pub async fn from_config_with_signals(
+        config: &RheaConfig,
+        model_loaded_tx: Option<mpsc::Sender<String>>,
+        model_unloaded_tx: Option<mpsc::Sender<String>>,
+    ) -> anyhow::Result<Self> {
         match config.backend {
             BackendKind::Local => {
                 use crate::local::LocalBackend;
                 use std::sync::Arc;
                 info!("using local llama.cpp backend");
-                let backend = Arc::new(LocalBackend::from_config(config));
+                let backend = Arc::new(LocalBackend::from_config_with_signals(
+                    config,
+                    model_loaded_tx,
+                    model_unloaded_tx,
+                ));
                 // Spawn idle timer before boxing so the Arc can be cloned.
                 Arc::clone(&backend).spawn_idle_timer();
                 // Arc<LocalBackend> implements AiBackend via the blanket impl below.

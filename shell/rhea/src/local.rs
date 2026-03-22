@@ -6,6 +6,11 @@
 ///
 /// An idle timer resets on each request. When it fires, `unload()` kills the
 /// subprocess to free RAM. On the next request `ensure_warm()` restarts it.
+///
+/// Signal senders (optional): when provided, `ensure_warm()` sends the model path
+/// on `model_loaded_tx` after a Cold→Warm transition, and `unload()` sends on
+/// `model_unloaded_tx` after a Warm→Cold transition. The main entry point wires
+/// these channels to D-Bus signal emission.
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,7 +19,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::Instant;
 use tracing::{debug, info};
 
@@ -55,11 +60,30 @@ pub struct LocalBackend {
     inner: Arc<Mutex<Inner>>,
     client: reqwest::Client,
     endpoint: String,
+    /// Fires when Cold→Warm transition completes; payload is the model path.
+    model_loaded_tx: Option<mpsc::Sender<String>>,
+    /// Fires when Warm→Cold transition completes; payload is the model path.
+    model_unloaded_tx: Option<mpsc::Sender<String>>,
 }
 
 impl LocalBackend {
-    /// Create a new LocalBackend from `RheaConfig`.
+    /// Create a new `LocalBackend` from `RheaConfig` with no signal senders.
+    ///
+    /// Used in tests and as a convenience for call-sites that don't need signals.
+    #[allow(dead_code)]
     pub fn from_config(config: &RheaConfig) -> Self {
+        Self::from_config_with_signals(config, None, None)
+    }
+
+    /// Create a new `LocalBackend` from `RheaConfig`, wiring optional signal senders.
+    ///
+    /// When `model_loaded_tx` is `Some`, the model path is sent on Cold→Warm.
+    /// When `model_unloaded_tx` is `Some`, the model path is sent on Warm→Cold.
+    pub fn from_config_with_signals(
+        config: &RheaConfig,
+        model_loaded_tx: Option<mpsc::Sender<String>>,
+        model_unloaded_tx: Option<mpsc::Sender<String>>,
+    ) -> Self {
         let endpoint = format!("http://127.0.0.1:{LLAMA_PORT}/v1/chat/completions");
         Self {
             model_path: config.local_model_path.to_string_lossy().into_owned(),
@@ -71,10 +95,14 @@ impl LocalBackend {
             })),
             client: reqwest::Client::new(),
             endpoint,
+            model_loaded_tx,
+            model_unloaded_tx,
         }
     }
 
     /// Ensure the llama-server is running.  Starts it if in the Cold state.
+    ///
+    /// On a Cold→Warm transition, sends the model path on `model_loaded_tx` (if set).
     pub async fn ensure_warm(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
         if inner.state == ModelState::Warm {
@@ -105,10 +133,18 @@ impl LocalBackend {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         info!("llama-server ready");
+
+        // Notify the D-Bus layer that the model is now loaded.
+        if let Some(tx) = &self.model_loaded_tx {
+            let _ = tx.send(self.model_path.clone()).await;
+        }
+
         Ok(())
     }
 
     /// Kill the llama-server subprocess and free RAM.
+    ///
+    /// On a Warm→Cold transition, sends the model path on `model_unloaded_tx` (if set).
     pub async fn unload(&self) {
         let mut inner = self.inner.lock().await;
         if inner.state == ModelState::Cold {
@@ -119,7 +155,15 @@ impl LocalBackend {
         }
         inner.state = ModelState::Cold;
         inner.last_request = None;
+        // Drop the lock before sending so the channel send doesn't hold the mutex.
+        drop(inner);
+
         info!("llama-server unloaded");
+
+        // Notify the D-Bus layer that the model has been unloaded.
+        if let Some(tx) = &self.model_unloaded_tx {
+            let _ = tx.send(self.model_path.clone()).await;
+        }
     }
 
     /// Spawn the idle timer task. Calls `unload()` after `idle_timeout` of inactivity.
