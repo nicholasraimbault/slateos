@@ -58,10 +58,7 @@ pub fn run(args: DevArgs) -> Result<()> {
 // Implementations
 // ---------------------------------------------------------------------------
 
-fn run_cargo_watch(
-    repo_root: &std::path::Path,
-    args: &DevArgs,
-) -> Result<()> {
+fn run_cargo_watch(repo_root: &std::path::Path, args: &DevArgs) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.arg("watch");
     cmd.arg("-c"); // Clear screen between runs.
@@ -89,10 +86,7 @@ fn run_cargo_watch(
     Ok(())
 }
 
-fn run_single_build(
-    repo_root: &std::path::Path,
-    args: &DevArgs,
-) -> Result<()> {
+fn run_single_build(repo_root: &std::path::Path, args: &DevArgs) -> Result<()> {
     let mut cmd = Command::new("cargo");
     let action = if args.test { "test" } else { "build" };
     cmd.arg(action);

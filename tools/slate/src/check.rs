@@ -32,13 +32,11 @@ pub struct CheckArgs {
 
 /// Execute `slate check`.
 pub fn run(args: CheckArgs) -> Result<()> {
-    let repo_root = crate::workspace::find_repo_root().context("could not find slateos repo root")?;
+    let repo_root =
+        crate::workspace::find_repo_root().context("could not find slateos repo root")?;
 
     let start = Instant::now();
-    let scope = args
-        .crate_name
-        .as_deref()
-        .unwrap_or("workspace");
+    let scope = args.crate_name.as_deref().unwrap_or("workspace");
 
     println!();
     println!("  slate check ({scope})");
@@ -67,10 +65,7 @@ pub fn run(args: CheckArgs) -> Result<()> {
 
     let elapsed = start.elapsed();
     println!();
-    println!(
-        "  All checks passed in {:.1}s",
-        elapsed.as_secs_f64()
-    );
+    println!("  All checks passed in {:.1}s", elapsed.as_secs_f64());
     println!();
 
     Ok(())

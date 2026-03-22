@@ -96,8 +96,14 @@ pub fn setup_cross_env(target: &str, custom_toolchain: &str) -> Option<HashMap<S
     env.insert(linker_var, "clang".to_string());
 
     // CC / AR for C code compiled as part of -sys crates.
-    env.insert("CC_aarch64_unknown_linux_musl".to_string(), "clang".to_string());
-    env.insert("AR_aarch64_unknown_linux_musl".to_string(), "llvm-ar".to_string());
+    env.insert(
+        "CC_aarch64_unknown_linux_musl".to_string(),
+        "clang".to_string(),
+    );
+    env.insert(
+        "AR_aarch64_unknown_linux_musl".to_string(),
+        "llvm-ar".to_string(),
+    );
 
     // Clang needs to know the target triple when cross-compiling.
     env.insert(
@@ -173,9 +179,7 @@ fn print_setup_instructions(instructions: &[String]) {
     }
     println!();
     println!("  After setup, run `slate build --device <device>` again.");
-    println!(
-        "  For a custom sysroot:  slate config --set-cross-toolchain /path/to/sysroot"
-    );
+    println!("  For a custom sysroot:  slate config --set-cross-toolchain /path/to/sysroot");
     println!();
 }
 

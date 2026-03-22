@@ -106,7 +106,12 @@ fn count_services(repo_root: &Option<std::path::PathBuf>) -> usize {
     };
     let base_dir = root.join("services").join("base");
     std::fs::read_dir(base_dir)
-        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .count()
+        })
         .unwrap_or(0)
 }
 
