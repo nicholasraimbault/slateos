@@ -2,7 +2,7 @@
 //
 // Polls `niri msg --json focused-window` to determine which application the
 // user is currently looking at. The resulting WindowContext is sent alongside
-// each OpenClaw query so the AI has awareness of the user's environment.
+// each Rhea query so the AI has awareness of the user's environment.
 
 use serde::{Deserialize, Serialize};
 

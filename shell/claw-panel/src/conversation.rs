@@ -1,7 +1,7 @@
 // In-memory conversation model.
 //
-// Stores the chat history between the user and the OpenClaw assistant.
-// Persistence is handled server-side by OpenClaw; this is purely the local
+// Stores the chat history between the user and the Rhea assistant.
+// Persistence is handled by Rhea; this is purely the local
 // view shown in the panel UI.
 
 use std::time::SystemTime;
