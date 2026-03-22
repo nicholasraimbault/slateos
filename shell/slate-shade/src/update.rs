@@ -9,6 +9,7 @@ use crate::actions;
 use crate::notifications::{
     remove_group, remove_notification, set_ai_summary, toggle_group, upsert_notification,
 };
+use crate::quick_settings::TileKind;
 use crate::{
     dbus_listener, HeadsUpAction, Message, NotifAction, QsAction, SlateShade, ANIM_TICK_MS,
 };
@@ -24,7 +25,7 @@ pub(super) fn update_app(app: &mut SlateShade, message: Message) -> Task<Message
             app.anim.close();
         }
         Message::NotifAction(action) => return handle_notif_action(app, action),
-        Message::QsAction(action) => handle_qs_action(app, action),
+        Message::QsAction(action) => return handle_qs_action(app, action),
         Message::HeadsUpAction(action) => return handle_hun_action(app, action),
         Message::AnimTick => {
             if !app.anim.is_settled() {
@@ -56,6 +57,10 @@ pub(super) fn update_app(app: &mut SlateShade, message: Message) -> Task<Message
                 app.smart_replies.insert(uuid, replies);
             }
         }
+        Message::SystemResult(Err(e)) => {
+            tracing::warn!("quick settings: {e}");
+        }
+        Message::SystemResult(Ok(())) => {}
     }
     Task::none()
 }
@@ -171,16 +176,72 @@ fn handle_notif_action(app: &mut SlateShade, action: NotifAction) -> Task<Messag
     }
 }
 
-fn handle_qs_action(app: &mut SlateShade, action: QsAction) {
+/// Minimum interval between consecutive sysfs/D-Bus writes for sliders.
+///
+/// Slider events fire at ~60 fps while the user drags; we only need to
+/// write to hardware once every 100 ms to avoid flooding the system.
+const SLIDER_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
+
+fn handle_qs_action(app: &mut SlateShade, action: QsAction) -> Task<Message> {
     match action {
+        QsAction::TileToggled(TileKind::WiFi) => {
+            // Optimistic local toggle; real state is confirmed by the next
+            // system-status poll or D-Bus signal once the hardware catches up.
+            app.qs.toggle_tile(TileKind::WiFi);
+            let active = app
+                .qs
+                .tiles
+                .iter()
+                .find(|t| t.kind == TileKind::WiFi)
+                .map(|t| t.active)
+                .unwrap_or(false);
+            Task::perform(slate_common::system::set_wifi_enabled(active), |r| {
+                Message::SystemResult(r.map_err(|e| e.to_string()))
+            })
+        }
+        QsAction::TileToggled(TileKind::Bluetooth) => {
+            app.qs.toggle_tile(TileKind::Bluetooth);
+            let active = app
+                .qs
+                .tiles
+                .iter()
+                .find(|t| t.kind == TileKind::Bluetooth)
+                .map(|t| t.active)
+                .unwrap_or(false);
+            Task::perform(slate_common::system::set_bluetooth_enabled(active), |r| {
+                Message::SystemResult(r.map_err(|e| e.to_string()))
+            })
+        }
         QsAction::TileToggled(kind) => {
+            // All other tiles (DND, AirplaneMode, AutoRotate, FlashLight,
+            // NightLight, Hotspot) toggle local state only for now; hardware
+            // backends for these will be wired when the drivers are ready.
             app.qs.toggle_tile(kind);
+            Task::none()
         }
         QsAction::BrightnessChanged(v) => {
             app.qs.set_brightness(v);
+            let now = std::time::Instant::now();
+            if now.duration_since(app.last_brightness_write) >= SLIDER_DEBOUNCE {
+                app.last_brightness_write = now;
+                Task::perform(slate_common::system::set_brightness(v), |r| {
+                    Message::SystemResult(r.map_err(|e| e.to_string()))
+                })
+            } else {
+                Task::none()
+            }
         }
         QsAction::VolumeChanged(v) => {
             app.qs.set_volume(v);
+            let now = std::time::Instant::now();
+            if now.duration_since(app.last_volume_write) >= SLIDER_DEBOUNCE {
+                app.last_volume_write = now;
+                Task::perform(slate_common::system::set_volume(v), |r| {
+                    Message::SystemResult(r.map_err(|e| e.to_string()))
+                })
+            } else {
+                Task::none()
+            }
         }
     }
 }
