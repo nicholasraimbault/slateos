@@ -4118,6 +4118,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "slate-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures-util",
+ "serde",
+ "slate-common",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zbus 5.14.0",
+]
+
+[[package]]
 name = "slate-launcher"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,23 @@
+[package]
+name = "slate-integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Integration tests that exercise D-Bus daemon communication.
+# Requires a Linux host with dbus-daemon installed.
+# Run via: dbus-run-session cargo test -p slate-integration-tests
+
+[dependencies]
+slate-common = { path = "../../shell/slate-common" }
+zbus = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+futures-util = "0.3"
