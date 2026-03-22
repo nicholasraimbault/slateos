@@ -5,7 +5,6 @@
 /// lifecycle events.
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
 use zbus::object_server::SignalEmitter;
 
 use slate_common::ai::{ChatMessage, CompletionRequest};
@@ -18,7 +17,8 @@ use crate::router::Router;
 // Shared router type
 // ---------------------------------------------------------------------------
 
-pub type SharedRouter = Arc<RwLock<Router>>;
+/// Router has no `&mut self` methods, so a plain `Arc` is sufficient.
+pub type SharedRouter = Arc<Router>;
 
 // ---------------------------------------------------------------------------
 // Status
@@ -54,8 +54,7 @@ impl RheaInterface {
         max_words: u32,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> String {
-        let router = self.router.read().await;
-        match router.summarize(text, max_words).await {
+        match self.router.summarize(text, max_words).await {
             Ok(summary) => {
                 let _ = Self::completion_done(&emitter, &summary).await;
                 summary
@@ -77,8 +76,7 @@ impl RheaInterface {
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> Vec<String> {
         let messages = parse_messages(messages_toml);
-        let router = self.router.read().await;
-        match router.suggest_replies(&messages).await {
+        match self.router.suggest_replies(&messages).await {
             Ok(replies) => {
                 let joined = replies.join("\n");
                 let _ = Self::completion_done(&emitter, &joined).await;
@@ -115,8 +113,7 @@ impl RheaInterface {
             max_tokens: None,
             temperature: None,
         };
-        let router = self.router.read().await;
-        match router.complete(request).await {
+        match self.router.complete(request).await {
             Ok(resp) => {
                 let _ = Self::completion_done(&emitter, &resp.text).await;
                 resp.text
@@ -151,8 +148,7 @@ impl RheaInterface {
             max_tokens: None,
             temperature: None,
         };
-        let router = self.router.read().await;
-        match router.complete(request).await {
+        match self.router.complete(request).await {
             Ok(resp) => {
                 // Emit the full text as a single chunk, then signal done.
                 let _ = Self::completion_chunk(&emitter, &resp.text).await;
@@ -168,8 +164,7 @@ impl RheaInterface {
     ///
     /// Returns a JSON-encoded `Intent` (using `serde_json`).
     async fn detect_intent(&self, text: &str) -> String {
-        let router = self.router.read().await;
-        match router.detect_intent(text).await {
+        match self.router.detect_intent(text).await {
             Ok(intent) => serde_json::to_string(&intent).unwrap_or_default(),
             Err(e) => {
                 tracing::warn!("detect_intent error: {e}");
@@ -183,8 +178,7 @@ impl RheaInterface {
     /// Returns a JSON-encoded `Classification`.
     async fn classify(&self, text: &str, categories_csv: &str) -> String {
         let cats: Vec<&str> = categories_csv.split(',').map(str::trim).collect();
-        let router = self.router.read().await;
-        match router.classify(text, &cats).await {
+        match self.router.classify(text, &cats).await {
             Ok(c) => serde_json::to_string(&c).unwrap_or_default(),
             Err(e) => {
                 tracing::warn!("classify error: {e}");
@@ -276,7 +270,7 @@ mod tests {
     use crate::router::StubBackend;
 
     fn make_router(stub: StubBackend) -> SharedRouter {
-        Arc::new(RwLock::new(Router::with_stub(stub)))
+        Arc::new(Router::with_stub(stub))
     }
 
     #[test]
@@ -346,5 +340,34 @@ content = "Hi there"
         let result = iface.classify("urgent message", "email,spam,other").await;
         let c: slate_common::ai::Classification = serde_json::from_str(&result).unwrap();
         assert_eq!(c.category, "email");
+    }
+
+    // `complete` and `suggest_replies` D-Bus methods accept a `SignalEmitter` which
+    // cannot be constructed without a live connection. We test the underlying router
+    // routing directly — this exercises the full call path minus the D-Bus signal.
+
+    #[tokio::test]
+    async fn complete_routes_through_stub() {
+        let stub = StubBackend {
+            completion_text: "hello from complete".to_string(),
+            ..StubBackend::default()
+        };
+        let router = make_router(stub);
+        let req = slate_common::ai::CompletionRequest::new("what time is it?");
+        let resp = router.complete(req).await.unwrap();
+        assert_eq!(resp.text, "hello from complete");
+    }
+
+    #[tokio::test]
+    async fn suggest_replies_routes_through_stub() {
+        let stub = StubBackend {
+            replies: vec!["Yes".to_string(), "No".to_string(), "Maybe".to_string()],
+            ..StubBackend::default()
+        };
+        let router = make_router(stub);
+        let msgs = vec![slate_common::ai::ChatMessage::new("user", "Are you free?")];
+        let replies = router.suggest_replies(&msgs).await.unwrap();
+        assert_eq!(replies.len(), 3);
+        assert_eq!(replies[0], "Yes");
     }
 }

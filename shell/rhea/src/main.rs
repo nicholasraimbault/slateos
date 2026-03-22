@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 mod cloud;
@@ -68,7 +67,10 @@ async fn main() -> Result<()> {
             .await
             .context("failed to create router")?;
 
-    let shared_router = Arc::new(RwLock::new(router));
+    let shared_router = Arc::new(router);
+    // Keep a reference for graceful shutdown so we can call router.shutdown()
+    // after the interface gives up its Arc (which moves into the object server).
+    let shutdown_router = Arc::clone(&shared_router);
 
     // Connect to session D-Bus and register the Rhea interface.
     let conn = zbus::Connection::session()
@@ -143,6 +145,10 @@ async fn main() -> Result<()> {
             info!("received SIGTERM, shutting down");
         }
     }
+
+    // Kill the llama-server child process (if running) before the process exits.
+    // Without this the child becomes an orphan and holds the model in RAM.
+    shutdown_router.shutdown().await;
 
     info!("rhea shutdown complete");
     Ok(())

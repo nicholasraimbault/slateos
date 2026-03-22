@@ -70,6 +70,8 @@ impl AiBackend for StubBackend {
 /// Owns one backend and delegates every AI call to it.
 pub struct Router {
     backend: Box<dyn AiBackend>,
+    /// Held only when the local backend is active so `shutdown()` can call `unload()`.
+    local_backend: Option<std::sync::Arc<crate::local::LocalBackend>>,
 }
 
 impl Router {
@@ -78,6 +80,7 @@ impl Router {
     pub fn with_stub(stub: StubBackend) -> Self {
         Self {
             backend: Box::new(stub),
+            local_backend: None,
         }
     }
 
@@ -114,9 +117,12 @@ impl Router {
                 ));
                 // Spawn idle timer before boxing so the Arc can be cloned.
                 Arc::clone(&backend).spawn_idle_timer();
+                // Keep a reference for graceful shutdown (unload kills the child process).
+                let local_ref = Arc::clone(&backend);
                 // Arc<LocalBackend> implements AiBackend via the blanket impl below.
                 Ok(Self {
                     backend: Box::new(ArcBackend(backend)),
+                    local_backend: Some(local_ref),
                 })
             }
             BackendKind::Cloud => {
@@ -125,6 +131,7 @@ impl Router {
                 let backend = CloudBackend::from_config(config).await?;
                 Ok(Self {
                     backend: Box::new(backend),
+                    local_backend: None,
                 })
             }
         }
@@ -160,6 +167,16 @@ impl Router {
     /// Delegate an intent detection request to the active backend.
     pub async fn detect_intent(&self, text: &str) -> Result<Intent, AiError> {
         self.backend.detect_intent(text).await
+    }
+
+    /// Graceful shutdown: kill the llama-server child process if running.
+    ///
+    /// Must be called before the process exits so the child is not left orphaned.
+    /// For the cloud backend this is a no-op.
+    pub async fn shutdown(&self) {
+        if let Some(local) = &self.local_backend {
+            local.unload().await;
+        }
     }
 }
 

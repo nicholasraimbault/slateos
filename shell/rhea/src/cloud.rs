@@ -105,9 +105,14 @@ impl CloudBackend {
 
         debug!(endpoint = %self.endpoint, model = %self.model, "sending chat request");
 
+        // Anthropic's API uses `x-api-key` instead of the OAuth2 `Authorization: Bearer` header.
         let mut req = self.client.post(&self.endpoint).json(&body);
         if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
+            req = if self.endpoint.contains("anthropic") {
+                req.header("x-api-key", key)
+            } else {
+                req.bearer_auth(key)
+            };
         }
 
         let resp = req

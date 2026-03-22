@@ -18,8 +18,8 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 reqwest = { workspace = true }
-serde_json = "1"
-async-trait = "0.1"
+serde_json = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

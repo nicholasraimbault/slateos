@@ -58,6 +58,10 @@ clap = { version = "4", features = ["derive"] }
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
+# Serialization / async utilities
+serde_json = "1"
+async-trait = "0.1"
+
 # Workspace-wide release profile (applies to all crates)
 [profile.release]
 lto = true

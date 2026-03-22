@@ -75,10 +75,10 @@ async fn get_clipboard() -> Option<String> {
         return None;
     }
     // Truncate to avoid sending huge clipboard contents to AI.
-    let truncated = if output.len() > CLIPBOARD_MAX_CHARS {
-        let mut s = output[..CLIPBOARD_MAX_CHARS].to_string();
-        s.push('…');
-        s
+    // Use char-boundary-safe truncation so multi-byte UTF-8 never panics.
+    let truncated = if output.chars().count() > CLIPBOARD_MAX_CHARS {
+        let truncated: String = output.chars().take(CLIPBOARD_MAX_CHARS).collect();
+        truncated + "…"
     } else {
         output
     };
@@ -241,17 +241,34 @@ body = ""
 
     #[test]
     fn clipboard_truncation_boundary() {
-        // Simulate what the clipboard truncation does to a long string.
+        // Simulate what the clipboard truncation does to a long ASCII string.
         let long_str = "a".repeat(600);
-        let truncated = if long_str.len() > CLIPBOARD_MAX_CHARS {
-            let mut s = long_str[..CLIPBOARD_MAX_CHARS].to_string();
-            s.push('…');
-            s
+        let truncated = if long_str.chars().count() > CLIPBOARD_MAX_CHARS {
+            let s: String = long_str.chars().take(CLIPBOARD_MAX_CHARS).collect();
+            s + "…"
         } else {
             long_str.clone()
         };
         // The returned string starts at the limit and has the ellipsis appended.
         assert!(truncated.starts_with(&"a".repeat(CLIPBOARD_MAX_CHARS)));
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_clipboard_multibyte() {
+        // "café" has a multi-byte é; ensure char-based truncation never panics
+        // and respects the character limit rather than a byte limit.
+        let input = "café".repeat(200); // way over 500 chars
+        let truncated = if input.chars().count() > CLIPBOARD_MAX_CHARS {
+            let s: String = input.chars().take(CLIPBOARD_MAX_CHARS).collect();
+            s + "…"
+        } else {
+            input.clone()
+        };
+        // Must not exceed CLIPBOARD_MAX_CHARS chars (plus the ellipsis).
+        assert!(truncated.chars().count() <= CLIPBOARD_MAX_CHARS + 1);
+        // Each char may be up to 4 bytes, so byte length is bounded.
+        assert!(truncated.len() <= CLIPBOARD_MAX_CHARS * 4 + "…".len());
         assert!(truncated.ends_with('…'));
     }
 }
