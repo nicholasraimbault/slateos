@@ -47,6 +47,26 @@ pub const SETTINGS_INTERFACE: &str = "org.slate.Settings";
 pub const SETTINGS_PATH: &str = "/org/slate/Settings";
 
 // ---------------------------------------------------------------------------
+// Rhea AI engine
+// ---------------------------------------------------------------------------
+pub const RHEA_INTERFACE: &str = "org.slate.Rhea";
+pub const RHEA_PATH: &str = "/org/slate/Rhea";
+pub const RHEA_BUS_NAME: &str = "org.slate.Rhea";
+
+// ---------------------------------------------------------------------------
+// Notification daemon (slate-notifyd)
+// ---------------------------------------------------------------------------
+pub const NOTIFICATIONS_INTERFACE: &str = "org.slate.Notifications";
+pub const NOTIFICATIONS_PATH: &str = "/org/slate/Notifications";
+pub const NOTIFICATIONS_BUS_NAME: &str = "org.slate.Notifications";
+
+// ---------------------------------------------------------------------------
+// Notification shade (slate-shade)
+// ---------------------------------------------------------------------------
+pub const SHADE_INTERFACE: &str = "org.slate.Shade";
+pub const SHADE_PATH: &str = "/org/slate/Shade";
+
+// ---------------------------------------------------------------------------
 // PaletteService — zbus interface for broadcasting palette changes
 // ---------------------------------------------------------------------------
 
@@ -88,6 +108,9 @@ mod tests {
             CLAW_INTERFACE,
             SUGGEST_INTERFACE,
             SETTINGS_INTERFACE,
+            RHEA_INTERFACE,
+            NOTIFICATIONS_INTERFACE,
+            SHADE_INTERFACE,
         ] {
             assert!(
                 iface.starts_with("org.slate."),
@@ -104,6 +127,9 @@ mod tests {
             CLAW_PATH,
             SUGGEST_PATH,
             SETTINGS_PATH,
+            RHEA_PATH,
+            NOTIFICATIONS_PATH,
+            SHADE_PATH,
         ] {
             assert!(
                 path.starts_with("/org/slate/"),
@@ -115,5 +141,15 @@ mod tests {
     #[test]
     fn palette_bus_name_matches_interface() {
         assert_eq!(PALETTE_BUS_NAME, PALETTE_INTERFACE);
+    }
+
+    #[test]
+    fn rhea_bus_name_matches_interface() {
+        assert_eq!(RHEA_BUS_NAME, RHEA_INTERFACE);
+    }
+
+    #[test]
+    fn notifications_bus_name_matches_interface() {
+        assert_eq!(NOTIFICATIONS_BUS_NAME, NOTIFICATIONS_INTERFACE);
     }
 }
