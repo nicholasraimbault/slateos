@@ -4387,6 +4387,7 @@ name = "slate-settings"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
  "iced",
  "nix 0.31.2",
  "serde",

@@ -65,6 +65,14 @@ fn main() -> anyhow::Result<()> {
 
     tracing::info!("starting slate-launcher (layershell)");
 
+    connect_with_retry()
+}
+
+/// Build a fresh `Settings` value for the layer-shell application.
+///
+/// Called on each retry attempt because `Settings` does not implement `Clone`.
+#[cfg(target_os = "linux")]
+fn build_settings() -> iced_layershell::settings::Settings<()> {
     use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
     use iced_layershell::settings::{LayerShellSettings, Settings};
 
@@ -80,12 +88,10 @@ fn main() -> anyhow::Result<()> {
         ..LayerShellSettings::default()
     };
 
-    let settings: Settings<()> = Settings {
+    Settings {
         layer_settings,
         ..Settings::default()
-    };
-
-    connect_with_retry(settings)
+    }
 }
 
 /// Attempt to start the iced_layershell application, retrying if the
@@ -98,7 +104,7 @@ fn main() -> anyhow::Result<()> {
 ///
 /// Any other error is treated as fatal and propagated immediately.
 #[cfg(target_os = "linux")]
-fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyhow::Result<()> {
+fn connect_with_retry() -> anyhow::Result<()> {
     use iced_layershell::Application as _;
 
     let mut last_err: Option<anyhow::Error> = None;
@@ -110,7 +116,7 @@ fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyh
             COMPOSITOR_CONNECT_RETRIES
         );
 
-        match LauncherLayerShell::run(settings.clone()) {
+        match LauncherLayerShell::run(build_settings()) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let msg = e.to_string();

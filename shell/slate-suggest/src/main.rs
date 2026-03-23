@@ -217,7 +217,7 @@ impl SuggestBar {
 fn dbus_subscription() -> iced::Subscription<Message> {
     #[cfg(target_os = "linux")]
     {
-        iced::subscription::channel("slate-suggest-dbus", 16, |mut output| async move {
+        let stream = iced::stream::channel(16, |mut output| async move {
             use iced::futures::SinkExt;
 
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -252,11 +252,9 @@ fn dbus_subscription() -> iced::Subscription<Message> {
                     }
                 }
             }
+        });
 
-            // Satisfy the never-returning future type by pending forever.
-            std::future::pending::<()>().await;
-            unreachable!();
-        })
+        iced::Subscription::run_with_id("slate-suggest-dbus", stream)
     }
 
     #[cfg(not(target_os = "linux"))]

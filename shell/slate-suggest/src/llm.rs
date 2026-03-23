@@ -20,14 +20,7 @@ async fn query_rhea(input: &str) -> Option<String> {
     use slate_common::dbus::{RHEA_BUS_NAME, RHEA_INTERFACE, RHEA_PATH};
 
     let conn = zbus::Connection::session().await.ok()?;
-    let proxy = zbus::Proxy::builder(&conn)
-        .destination(RHEA_BUS_NAME)
-        .ok()?
-        .path(RHEA_PATH)
-        .ok()?
-        .interface(RHEA_INTERFACE)
-        .ok()?
-        .build()
+    let proxy = zbus::Proxy::new(&conn, RHEA_BUS_NAME, RHEA_PATH, RHEA_INTERFACE)
         .await
         .ok()?;
 

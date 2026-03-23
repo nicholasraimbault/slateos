@@ -638,29 +638,29 @@ fn run_app() -> anyhow::Result<()> {
 
 #[cfg(target_os = "linux")]
 fn run_app() -> anyhow::Result<()> {
-    use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
-    use iced_layershell::settings::{LayerShellSettings, Settings};
-    use iced_layershell::Application as _;
-
-    let layer_settings = LayerShellSettings {
-        size: Some((INITIAL_SURFACE_WIDTH, dock::DOCK_HEIGHT)),
-        anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
-        exclusive_zone: dock::DOCK_HEIGHT as i32,
-        layer: Layer::Top,
-        keyboard_interactivity: KeyboardInteractivity::None,
-        ..Default::default()
-    };
-
-    let settings: Settings<()> = Settings {
-        layer_settings,
-        ..Default::default()
-    };
-
-    connect_with_retry(settings)
+    connect_with_retry()
 }
 
 #[cfg(target_os = "linux")]
-fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyhow::Result<()> {
+fn make_layer_settings() -> iced_layershell::settings::Settings<()> {
+    use iced_layershell::reexport::{Anchor, KeyboardInteractivity, Layer};
+    use iced_layershell::settings::{LayerShellSettings, Settings};
+
+    Settings {
+        layer_settings: LayerShellSettings {
+            size: Some((INITIAL_SURFACE_WIDTH, dock::DOCK_HEIGHT)),
+            anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
+            exclusive_zone: dock::DOCK_HEIGHT as i32,
+            layer: Layer::Top,
+            keyboard_interactivity: KeyboardInteractivity::None,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn connect_with_retry() -> anyhow::Result<()> {
     use iced_layershell::Application as _;
 
     let mut last_err: Option<anyhow::Error> = None;
@@ -672,7 +672,7 @@ fn connect_with_retry(settings: iced_layershell::settings::Settings<()>) -> anyh
             COMPOSITOR_CONNECT_RETRIES
         );
 
-        match ShoalLayerShell::run(settings.clone()) {
+        match ShoalLayerShell::run(make_layer_settings()) {
             Ok(()) => return Ok(()),
             Err(e) => {
                 let msg = e.to_string();
