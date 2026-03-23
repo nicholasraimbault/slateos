@@ -18,11 +18,15 @@ use crate::gesture::{GestureType, SwipeDirection};
 /// running compositor.
 #[allow(async_fn_in_trait)]
 pub trait NiriDispatch {
+    #[allow(dead_code)]
     async fn focus_column_left(&self) -> Result<()>;
+    #[allow(dead_code)]
     async fn focus_column_right(&self) -> Result<()>;
     async fn toggle_overview(&self) -> Result<()>;
     async fn show_desktop(&self) -> Result<()>;
+    #[allow(dead_code)]
     async fn move_column_left(&self) -> Result<()>;
+    #[allow(dead_code)]
     async fn move_column_right(&self) -> Result<()>;
     async fn focus_workspace_up(&self) -> Result<()>;
     async fn focus_workspace_down(&self) -> Result<()>;
@@ -34,10 +38,12 @@ pub trait NiriDispatch {
 #[allow(async_fn_in_trait)]
 pub trait EmitterDispatch {
     async fn show_dock(&self) -> Result<()>;
+    #[allow(dead_code)]
     async fn hide_dock(&self) -> Result<()>;
     async fn show_launcher(&self) -> Result<()>;
     async fn hide_launcher(&self) -> Result<()>;
     async fn show_claw(&self) -> Result<()>;
+    #[allow(dead_code)]
     async fn hide_claw(&self) -> Result<()>;
     async fn emit_edge_gesture(
         &self,

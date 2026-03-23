@@ -67,11 +67,13 @@ impl Default for InputState {
 
 impl InputState {
     /// Count currently-active fingers.
+    #[allow(dead_code)]
     pub fn active_finger_count(&self) -> usize {
         self.slots.iter().filter(|s| s.is_active()).count()
     }
 
     /// Positions of all active fingers.
+    #[allow(dead_code)]
     pub fn active_positions(&self) -> Vec<(i32, i32)> {
         self.slots
             .iter()
@@ -107,6 +109,7 @@ pub enum InputEvent {
 }
 
 /// Apply an `InputEvent` to an `InputState`, mutating it in place.
+#[allow(dead_code)]
 pub fn apply_event(state: &mut InputState, event: &InputEvent) {
     match event {
         InputEvent::FingerDown { slot, x, y, .. } => {
@@ -143,7 +146,7 @@ pub mod device {
     use anyhow::{Context, Result};
     use evdev::AbsoluteAxisType;
     use tokio::sync::mpsc;
-    use tracing::{debug, info, warn};
+    use tracing::info;
 
     /// Scan `/dev/input/event*` and return the first device that has
     /// `ABS_MT_POSITION_X` capability (i.e. a multitouch touchscreen).

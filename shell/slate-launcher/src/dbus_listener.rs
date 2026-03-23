@@ -84,7 +84,7 @@ pub async fn run_dbus_listener(
 /// Subscribe to palette `Changed` signals from the slate-palette daemon.
 #[cfg(target_os = "linux")]
 async fn listen_palette_changes(
-    sender: tokio::sync::mpsc::UnboundedSender<DbusEvent>,
+    _sender: tokio::sync::mpsc::UnboundedSender<DbusEvent>,
 ) -> anyhow::Result<()> {
     use slate_common::dbus::{PALETTE_INTERFACE, PALETTE_PATH};
     use zbus::Connection;

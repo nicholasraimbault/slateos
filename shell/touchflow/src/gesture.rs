@@ -78,6 +78,7 @@ pub enum GestureType {
         direction: SwipeDirection,
         velocity: f64,
     },
+    #[allow(dead_code)]
     Pinch {
         fingers: u8,
         /// > 1.0 means fingers spread apart, < 1.0 means pinch together.
@@ -397,6 +398,7 @@ impl Recognizer {
     ///
     /// If a continuous edge gesture was in progress, returns a Cancel event.
     /// Otherwise returns an empty vec.
+    #[allow(dead_code)]
     pub fn cancel(&mut self) -> Vec<GestureType> {
         let mut results = Vec::new();
         if self.tracking_continuous_edge {

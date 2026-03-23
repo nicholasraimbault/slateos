@@ -341,50 +341,50 @@ fn extract_command_from_title(title: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "linux")]
+impl TryInto<iced_layershell::actions::LayershellCustomActions> for Message {
+    type Error = Self;
+    fn try_into(self) -> Result<iced_layershell::actions::LayershellCustomActions, Self::Error> {
+        Err(self)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl iced_layershell::Application for SuggestBar {
+    type Message = Message;
+    type Flags = ();
+    type Theme = iced::Theme;
+    type Executor = iced::executor::Default;
+
+    fn new(_flags: ()) -> (Self, iced::Task<Message>) {
+        (SuggestBar::new(), iced::Task::none())
+    }
+
+    fn namespace(&self) -> String {
+        "slate-suggest".to_string()
+    }
+
+    fn update(&mut self, message: Message) -> iced::Task<Message> {
+        SuggestBar::update(self, message)
+    }
+
+    fn view(&self) -> iced::Element<'_, Message, Self::Theme, iced::Renderer> {
+        SuggestBar::view(self)
+    }
+
+    fn theme(&self) -> iced::Theme {
+        SuggestBar::theme(self)
+    }
+
+    fn subscription(&self) -> iced::Subscription<Message> {
+        SuggestBar::subscription(self)
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn run_layershell() -> Result<()> {
     use iced_layershell::reexport::{Anchor, Layer};
     use iced_layershell::settings::{LayerShellSettings, Settings};
-    use iced_layershell::Application;
-
-    impl Application for SuggestBar {
-        type Message = Message;
-        type Flags = ();
-        type Theme = iced::Theme;
-        type Executor = iced::executor::Default;
-
-        fn new(_flags: ()) -> (Self, iced::Task<Message>) {
-            (SuggestBar::new(), iced::Task::none())
-        }
-
-        fn namespace(&self) -> String {
-            "slate-suggest".to_string()
-        }
-
-        fn update(&mut self, message: Message) -> iced::Task<Message> {
-            SuggestBar::update(self, message)
-        }
-
-        fn view(&self) -> iced::Element<'_, Message, Self::Theme, iced::Renderer> {
-            SuggestBar::view(self)
-        }
-
-        fn theme(&self) -> iced::Theme {
-            SuggestBar::theme(self)
-        }
-
-        fn subscription(&self) -> iced::Subscription<Message> {
-            SuggestBar::subscription(self)
-        }
-    }
-
-    impl TryInto<iced_layershell::actions::LayershellCustomActions> for Message {
-        type Error = Self;
-        fn try_into(
-            self,
-        ) -> Result<iced_layershell::actions::LayershellCustomActions, Self::Error> {
-            Err(self)
-        }
-    }
+    use iced_layershell::Application as _;
 
     let settings = Settings {
         layer_settings: LayerShellSettings {

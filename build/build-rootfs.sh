@@ -105,6 +105,9 @@ apk add nftables
 # Privilege escalation
 apk add doas
 
+# Authentication (PAM for lock screen)
+apk add linux-pam shadow
+
 # Cleanup
 apk cache clean || true
 PKGEOF
@@ -136,7 +139,7 @@ cd /tmp/slate-os
 cargo build --release --workspace
 
 # Install shell binaries
-for bin in touchflow shoal slate-launcher claw-panel slate-palette slate-suggest slate-settings slate-power; do
+for bin in touchflow shoal slate-launcher claw-panel slate-palette slate-suggest slate-settings slate-power-monitor slate-notifyd slate-shade slate-lock rhea; do
     if [ -f "target/release/$bin" ]; then
         install -Dm755 "target/release/$bin" "/usr/bin/$bin"
     fi
@@ -211,6 +214,13 @@ install -Dm644 "$SLATE_SRC/config/nftables/slate-firewall.conf" "$ROOTFS_DIR/etc
 # Default wallpaper
 install -Dm644 "$SLATE_SRC/rom/wallpapers/default.jpg" "$ROOTFS_DIR/usr/share/backgrounds/slate-default.jpg" 2>/dev/null || \
     echo "Warning: default wallpaper not found"
+
+# PAM config for lock screen authentication
+cat > "$ROOTFS_DIR/etc/pam.d/slate-lock" << 'PAMEOF'
+auth    required    pam_unix.so
+account required    pam_unix.so
+PAMEOF
+chmod 644 "$ROOTFS_DIR/etc/pam.d/slate-lock"
 
 # Default settings directory
 install -dm755 "$ROOTFS_DIR/etc/skel/.config/slate"

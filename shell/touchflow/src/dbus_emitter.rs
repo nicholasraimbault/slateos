@@ -35,6 +35,7 @@ impl TouchFlowEmitter {
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn hide_dock(&self) -> Result<()> {
         debug!("emitting Hide to Dock");
         self.call_method(dbus::DOCK_INTERFACE, dbus::DOCK_PATH, "Hide")
@@ -67,6 +68,7 @@ impl TouchFlowEmitter {
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn hide_claw(&self) -> Result<()> {
         debug!("emitting Hide to Claw");
         self.call_method(dbus::CLAW_INTERFACE, dbus::CLAW_PATH, "Hide")

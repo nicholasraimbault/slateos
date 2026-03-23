@@ -158,6 +158,7 @@ pub async fn listen_notification_counts(
 
 /// Try to load the current palette from the running palette daemon.
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // Will be used once palette prefetch is wired in
 pub async fn fetch_current_palette() -> anyhow::Result<Palette> {
     use zbus::Connection;
 

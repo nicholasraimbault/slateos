@@ -157,6 +157,7 @@ impl Shoal {
         )
     }
 
+    #[allow(dead_code)] // Used by macOS fallback entry point
     fn title(&self) -> String {
         "Shoal".to_string()
     }

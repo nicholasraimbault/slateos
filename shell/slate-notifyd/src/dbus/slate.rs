@@ -50,8 +50,8 @@ impl SlateNotifications {
             .timestamp_opt(since_timestamp, 0)
             .single()
             .unwrap_or_else(Utc::now);
-        let notifications = HistoryReader::read(&self.history_dir, since, limit as usize)
-            .unwrap_or_default();
+        let notifications =
+            HistoryReader::read(&self.history_dir, since, limit as usize).unwrap_or_default();
 
         #[derive(serde::Serialize)]
         struct Wrapper {

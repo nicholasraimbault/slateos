@@ -74,15 +74,17 @@ impl DaemonProcess {
             cmd.env(key, val);
         }
 
-        let child = cmd.spawn()
+        let child = cmd
+            .spawn()
             .map_err(|e| anyhow::anyhow!("failed to spawn {binary_name}: {e}"))?;
 
         // Wait for the daemon to claim its bus name.
-        wait_for_bus_name(conn, bus_name).await
-            .map_err(|e| anyhow::anyhow!(
+        wait_for_bus_name(conn, bus_name).await.map_err(|e| {
+            anyhow::anyhow!(
                 "{binary_name} did not claim bus name '{bus_name}' within {:?}: {e}",
                 BUS_NAME_TIMEOUT
-            ))?;
+            )
+        })?;
 
         tracing::info!("{binary_name} is ready (bus name: {bus_name})");
 
@@ -93,12 +95,16 @@ impl DaemonProcess {
     }
 
     /// Send SIGTERM, wait for exit, then wait for bus name(s) release.
-    pub async fn shutdown(mut self, conn: &Connection, bus_name: &str) -> anyhow::Result<()> {
+    pub async fn shutdown(self, conn: &Connection, bus_name: &str) -> anyhow::Result<()> {
         self.shutdown_multi(conn, &[bus_name]).await
     }
 
     /// Shutdown and wait for multiple bus names to be released.
-    pub async fn shutdown_multi(mut self, conn: &Connection, bus_names: &[&str]) -> anyhow::Result<()> {
+    pub async fn shutdown_multi(
+        mut self,
+        conn: &Connection,
+        bus_names: &[&str],
+    ) -> anyhow::Result<()> {
         tracing::info!("shutting down {}", self.name);
 
         // Send SIGTERM.
@@ -152,9 +158,7 @@ async fn wait_for_bus_name(conn: &Connection, bus_name: &str) -> anyhow::Result<
     .await?;
 
     loop {
-        let reply = dbus_proxy
-            .call_method("NameHasOwner", &(bus_name,))
-            .await?;
+        let reply = dbus_proxy.call_method("NameHasOwner", &(bus_name,)).await?;
         let owned: bool = reply.body().deserialize()?;
         if owned {
             return Ok(());
@@ -180,16 +184,16 @@ async fn wait_for_bus_name_released(conn: &Connection, bus_name: &str) -> anyhow
     .await?;
 
     loop {
-        let reply = dbus_proxy
-            .call_method("NameHasOwner", &(bus_name,))
-            .await?;
+        let reply = dbus_proxy.call_method("NameHasOwner", &(bus_name,)).await?;
         let owned: bool = reply.body().deserialize()?;
         if !owned {
             return Ok(());
         }
 
         if tokio::time::Instant::now() >= deadline {
-            return Err(anyhow::anyhow!("timeout waiting for bus name '{bus_name}' to be released"));
+            return Err(anyhow::anyhow!(
+                "timeout waiting for bus name '{bus_name}' to be released"
+            ));
         }
 
         tokio::time::sleep(BUS_NAME_POLL_INTERVAL).await;
@@ -230,7 +234,10 @@ macro_rules! skip_without_dbus {
 macro_rules! skip_without_binary {
     ($name:expr) => {
         if $crate::harness::find_binary($name).is_none() {
-            eprintln!("SKIP: binary '{}' not found — run `cargo build -p {}`", $name, $name);
+            eprintln!(
+                "SKIP: binary '{}' not found — run `cargo build -p {}`",
+                $name, $name
+            );
             return;
         }
     };

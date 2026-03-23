@@ -17,6 +17,7 @@ const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 const FAILURE_WINDOW_SECS: f64 = 10.0;
 
 pub struct NiriClient {
+    #[allow(dead_code)]
     socket_path: PathBuf,
     consecutive_failures: AtomicU32,
     first_failure_time: Mutex<Option<Instant>>,
@@ -28,6 +29,7 @@ impl NiriClient {
     /// Reads `$NIRI_SOCKET` (or accepts an override) to know where Niri
     /// listens. On construction we do **not** attempt a connection — that
     /// happens lazily on the first action.
+    #[allow(dead_code)]
     pub async fn new() -> Result<Self> {
         Self::with_socket_override(None).await
     }
@@ -56,10 +58,12 @@ impl NiriClient {
     // High-level gesture actions
     // -----------------------------------------------------------------------
 
+    #[allow(dead_code)]
     pub async fn focus_column_left(&self) -> Result<()> {
         self.run_action("focus-column-left").await
     }
 
+    #[allow(dead_code)]
     pub async fn focus_column_right(&self) -> Result<()> {
         self.run_action("focus-column-right").await
     }
@@ -75,10 +79,12 @@ impl NiriClient {
         self.run_action("focus-workspace-down").await
     }
 
+    #[allow(dead_code)]
     pub async fn move_column_left(&self) -> Result<()> {
         self.run_action("move-column-left").await
     }
 
+    #[allow(dead_code)]
     pub async fn move_column_right(&self) -> Result<()> {
         self.run_action("move-column-right").await
     }
@@ -153,6 +159,7 @@ impl NiriClient {
 
     /// Returns `true` when Niri has exceeded the failure threshold and should
     /// be considered unresponsive.
+    #[allow(dead_code)]
     pub fn is_unresponsive(&self) -> bool {
         self.consecutive_failures.load(Ordering::Relaxed) >= MAX_CONSECUTIVE_FAILURES
     }

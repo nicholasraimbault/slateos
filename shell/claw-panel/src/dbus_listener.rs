@@ -12,8 +12,10 @@
 use slate_common::Palette;
 
 // Constants are used in cfg(linux) blocks and tests.
+#[cfg(test)]
+use slate_common::dbus::CLAW_INTERFACE;
 #[cfg(any(target_os = "linux", test))]
-use slate_common::dbus::{CLAW_INTERFACE, CLAW_PATH};
+use slate_common::dbus::CLAW_PATH;
 #[cfg(target_os = "linux")]
 use slate_common::dbus::{
     PALETTE_BUS_NAME, PALETTE_INTERFACE, PALETTE_PATH, RHEA_BUS_NAME, RHEA_INTERFACE, RHEA_PATH,
