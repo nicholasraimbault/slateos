@@ -85,14 +85,12 @@ fn view(app: &Welcome) -> Element<'_, Message> {
     let step_content = steps::view(&app.step).map(Message::Step);
 
     let nav = match app.step {
-        Step::Welcome => {
-            container(
-                button(text("Get Started").size(16))
-                    .on_press(Message::Next)
-                    .padding(12),
-            )
-            .center_x(Length::Fill)
-        }
+        Step::Welcome => container(
+            button(text("Get Started").size(16))
+                .on_press(Message::Next)
+                .padding(12),
+        )
+        .center_x(Length::Fill),
         Step::Done => container(
             button(text("Start Using SlateOS").size(16))
                 .on_press(Message::Next)

@@ -123,9 +123,7 @@ pub struct StepState {
 
 pub fn update(step: &mut Step, action: StepAction) -> Option<iced::Task<StepAction>> {
     match action {
-        StepAction::WifiSsidInput(_)
-        | StepAction::WifiPasswordInput(_)
-        | StepAction::WifiSkip => {
+        StepAction::WifiSsidInput(_) | StepAction::WifiPasswordInput(_) | StepAction::WifiSkip => {
             // These are handled by the parent via StepState
             None
         }
