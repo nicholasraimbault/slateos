@@ -1,49 +1,75 @@
 # SlateOS
 
-A Linux distribution for tablets, phones, and desktops. Built on Chimera Linux with a custom touch-first shell written in Rust.
+A touch-first Linux distribution for laptops, tablets, and phones. Built on Chimera Linux with a custom shell written in Rust.
 
 ## What Is This
 
-SlateOS replaces stock Android or generic Linux desktops with a purpose-built environment: the Niri scrollable tiling Wayland compositor for window management, and a suite of Rust applications for gestures, app launching, theming, and AI assistance. It targets the Pixel Tablet as its primary device, with support for Pixel phones, the Pixel Fold, Framework laptops, and generic x86 desktops.
+SlateOS is a complete operating system — custom init, custom shell, scrollable tiling compositor — designed from the ground up for touchscreens. It runs on open hardware with mainline Linux kernels, no vendor blobs, no compromises.
 
 ## Why
 
-Most mobile Linux projects bolt a desktop UI onto a phone. SlateOS goes the other direction — it starts from touch and works outward. Multitouch gestures drive spatial navigation. Spring-animated physics make every interaction feel physical. Material You theming adapts the entire system to your wallpaper. An AI sidebar provides context-aware assistance. No telemetry, no ads, no dark patterns.
+Most mobile Linux projects bolt a desktop UI onto a phone. SlateOS starts from touch and works outward. Multitouch gestures drive spatial navigation. Spring-animated physics make interactions feel physical. Material You theming adapts the system to your wallpaper. An AI sidebar provides context-aware assistance. No telemetry, no ads, no dark patterns.
 
 ## Design Philosophy
 
-SlateOS is built on **pronoia** — the belief that the system is conspiring in your favor. Every default is chosen to help, not to extract. The software respects your attention, your hardware, and your time. Settings are opinionated so things work immediately, but everything is exposed for users who want control. The system assumes you are competent and treats you accordingly.
+SlateOS is built on **pronoia** — the belief that the system is conspiring in your favor. Every default helps, never extracts. Settings are opinionated so things work immediately, but everything is exposed for users who want control. The system assumes you are competent and treats you accordingly.
 
 ## Stack
 
 | Layer | Choice |
 |-------|--------|
 | Base distro | Chimera Linux (musl, LLVM/Clang, apk) |
-| Init | arkhe (custom PID 1 + supervisor, io_uring) |
+| Init | [arkhe](https://github.com/nicholasraimbault/arkhe) (custom, Rust, io_uring, Landlock sandboxing) |
 | Compositor | niri (Wayland, Smithay, scrollable tiling) |
-| Shell | 9 Rust crates (iced 0.13, layer-shell, D-Bus) |
+| Shell | 13 Rust crates (iced 0.13, layer-shell, D-Bus) |
 | Gestures | TouchFlow (evdev, sub-frame gesture recognition) |
 | Theming | slate-palette (Material You from wallpaper, D-Bus broadcast) |
-| AI | Claw Panel (OpenClaw WebSocket sidebar, code block apply) |
-| Suggestions | slate-suggest (shell history + LLM completions) |
+| AI | Rhea engine + Claw Panel sidebar |
+| TLS | rustls (no OpenSSL) |
 
 ## Shell Components
 
 | Component | Description |
 |-----------|-------------|
-| **shoal** | macOS-style dock with magnification, context menus, pin/unpin |
-| **slate-launcher** | Fullscreen app grid with search, recent apps, launch feedback |
-| **claw-panel** | AI sidebar with streaming responses, clipboard integration |
+| **shoal** | Dock with magnification, context menus, pin/unpin |
+| **slate-launcher** | Fullscreen app grid with search and launch feedback |
+| **slate-lock** | Lock screen with PIN/PAM auth, adaptive layout, shake animation |
+| **slate-shade** | Notification shade with quick settings |
+| **slate-notifyd** | Notification daemon (freedesktop + slate D-Bus, history) |
+| **claw-panel** | AI sidebar with streaming responses |
 | **slate-suggest** | Keyboard suggestion bar with history and LLM completions |
-| **slate-palette** | Dynamic theming daemon with built-in color extraction |
+| **slate-palette** | Dynamic theming daemon with Material You color extraction |
 | **touchflow** | Multitouch gesture daemon (tap, swipe, pinch, edge gestures) |
-| **slate-settings** | Settings app (WiFi, display, brightness, gestures, AI, FEX) |
-| **slate-power** | Power button monitor (suspend on short press, poweroff on long) |
+| **slate-settings** | Settings app (display, WiFi, gestures, AI, security, keyboard) |
+| **slate-power** | Power button monitor (suspend, poweroff, lock-before-suspend) |
+| **rhea** | AI engine daemon (routes to local/cloud backends via D-Bus) |
 | **slate-common** | Shared library (palette, D-Bus, settings, theme, toasts, icons) |
 
-## Developer Tool
+## Target Hardware
 
-The `slate` CLI provides a unified development workflow:
+SlateOS only targets devices with full mainline Linux kernel support. No out-of-tree drivers, no vendor blobs.
+
+| Device | SoC | GPU driver | Priority |
+|--------|-----|-----------|----------|
+| Framework Laptop 12 | Intel/AMD | i915/amdgpu | Primary — dev machine + first target |
+| Generic x86 | any | mainline | Ships alongside Framework |
+| Pinebook Pro | RK3399 | Panfrost | First ARM target |
+| PineTab 2 | RK3566 | Panfrost | ARM tablet |
+| PinePhone Pro | RK3399S | Panfrost | Phone |
+
+Future ecosystem integration: PineTime (notifications), PineBuds Pro (audio).
+
+## Quick Start
+
+```bash
+git clone https://github.com/nicholasraimbault/slateos
+cd slateos
+cargo build --workspace
+cargo test --workspace     # 947 tests
+cargo run -p slate -- check  # check + clippy + test
+```
+
+## Developer Tool
 
 ```bash
 slate build                    # Build all shell crates
@@ -52,44 +78,13 @@ slate check                    # Run check + clippy + test
 slate dev                      # Live rebuild on file changes
 slate status                   # Show build state for all crates
 slate services                 # List arkhe service definitions
-slate services --inspect niri  # Inspect a specific service
 slate config                   # View/edit CLI configuration
 slate info                     # System and project diagnostics
 ```
 
-## Target Devices
+## Status
 
-| Device | SoC | Status |
-|--------|-----|--------|
-| Pixel Tablet | Tensor G2 | Primary target |
-| Pixel Phone | Tensor | Secondary |
-| Pixel Fold | Tensor G2 | Secondary |
-| Framework 12 | x86 (touchscreen) | Dev machine |
-| Generic x86 | any | Development target |
-
-## Quick Start
-
-```bash
-# Clone and build
-git clone https://github.com/nicholasraimbault/slateos
-cd slateos
-cargo build --workspace
-
-# Run verification
-cargo run -p slate -- check
-
-# See project info
-cargo run -p slate -- info
-```
-
-See [docs/BUILDING.md](docs/BUILDING.md) for rootfs builds and device flashing.
-
-## Documentation
-
-- [Architecture](docs/ARCHITECTURE.md) — system design and boot chain
-- [Building](docs/BUILDING.md) — build instructions and rootfs creation
-- [Devices](docs/DEVICES.md) — supported hardware
-- [Pronoia](docs/PRONOIA.md) — design philosophy
+Early alpha. 13 crates compile, 947 tests pass, CI green.
 
 ## License
 
