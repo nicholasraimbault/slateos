@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use slate_common::dbus::{NOTIFICATIONS_BUS_NAME, NOTIFICATIONS_INTERFACE, NOTIFICATIONS_PATH};
-use zbus::Connection;
 use zbus::zvariant::Value;
+use zbus::Connection;
 
 use crate::harness::{slate_proxy, DaemonProcess};
 use crate::{skip_without_binary, skip_without_dbus};
@@ -26,7 +26,13 @@ async fn fd_proxy(conn: &Connection) -> anyhow::Result<zbus::Proxy<'static>> {
 
 /// Create a Slate notifications proxy.
 async fn slate_notif_proxy(conn: &Connection) -> anyhow::Result<zbus::Proxy<'static>> {
-    slate_proxy(conn, NOTIFICATIONS_BUS_NAME, NOTIFICATIONS_PATH, NOTIFICATIONS_INTERFACE).await
+    slate_proxy(
+        conn,
+        NOTIFICATIONS_BUS_NAME,
+        NOTIFICATIONS_PATH,
+        NOTIFICATIONS_INTERFACE,
+    )
+    .await
 }
 
 /// Send a notification via freedesktop Notify and return the assigned ID.
@@ -42,14 +48,14 @@ async fn send_notification(
         .call_method(
             "Notify",
             &(
-                app_name,         // app_name
-                0u32,             // replaces_id
-                "",               // app_icon
-                summary,          // summary
-                body,             // body
-                actions,          // actions
-                hints,            // hints
-                -1i32,            // expire_timeout
+                app_name, // app_name
+                0u32,     // replaces_id
+                "",       // app_icon
+                summary,  // summary
+                body,     // body
+                actions,  // actions
+                hints,    // hints
+                -1i32,    // expire_timeout
             ),
         )
         .await?;
@@ -78,11 +84,20 @@ async fn notifyd_starts_and_claims_bus_name() {
 
     // Verify we can query it.
     let proxy = fd_proxy(&conn).await.unwrap();
-    let reply = proxy.call_method("GetServerInformation", &()).await.unwrap();
+    let reply = proxy
+        .call_method("GetServerInformation", &())
+        .await
+        .unwrap();
     let (name, _, _, _): (String, String, String, String) = reply.body().deserialize().unwrap();
     assert_eq!(name, "slate-notifyd");
 
-    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
+    daemon
+        .shutdown_multi(
+            &conn,
+            &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"],
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -121,7 +136,13 @@ async fn send_and_retrieve_notification() {
         "should contain our summary"
     );
 
-    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
+    daemon
+        .shutdown_multi(
+            &conn,
+            &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"],
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -156,16 +177,10 @@ async fn dismiss_removes_notification() {
         .lines()
         .find(|l| l.starts_with("uuid"))
         .expect("should have uuid field");
-    let uuid_str = uuid_line
-        .split('"')
-        .nth(1)
-        .expect("uuid should be quoted");
+    let uuid_str = uuid_line.split('"').nth(1).expect("uuid should be quoted");
 
     // Dismiss it.
-    slate
-        .call_method("Dismiss", &(uuid_str,))
-        .await
-        .unwrap();
+    slate.call_method("Dismiss", &(uuid_str,)).await.unwrap();
 
     // Verify it's gone.
     let reply = slate.call_method("GetActive", &()).await.unwrap();
@@ -175,7 +190,13 @@ async fn dismiss_removes_notification() {
         "dismissed notification should be removed"
     );
 
-    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
+    daemon
+        .shutdown_multi(
+            &conn,
+            &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"],
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -203,7 +224,13 @@ async fn fd_id_increments_monotonically() {
     assert!(id2 > id1, "IDs should increase: {id2} > {id1}");
     assert!(id3 > id2, "IDs should increase: {id3} > {id2}");
 
-    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
+    daemon
+        .shutdown_multi(
+            &conn,
+            &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"],
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -272,7 +299,13 @@ async fn dnd_property_round_trip() {
     let dnd_bool: bool = dnd.try_into().unwrap();
     assert!(!dnd_bool, "DND should be false after unsetting");
 
-    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
+    daemon
+        .shutdown_multi(
+            &conn,
+            &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"],
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -297,9 +330,18 @@ async fn get_capabilities_returns_expected_list() {
     let caps: Vec<String> = reply.body().deserialize().unwrap();
 
     assert!(caps.contains(&"body".to_string()), "should support body");
-    assert!(caps.contains(&"actions".to_string()), "should support actions");
+    assert!(
+        caps.contains(&"actions".to_string()),
+        "should support actions"
+    );
 
-    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
+    daemon
+        .shutdown_multi(
+            &conn,
+            &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"],
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -335,5 +377,11 @@ async fn dismiss_all_clears_non_persistent() {
         "all non-persistent notifications should be dismissed"
     );
 
-    daemon.shutdown_multi(&conn, &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"]).await.unwrap();
+    daemon
+        .shutdown_multi(
+            &conn,
+            &[NOTIFICATIONS_BUS_NAME, "org.freedesktop.Notifications"],
+        )
+        .await
+        .unwrap();
 }

@@ -9,8 +9,8 @@
 pub mod harness;
 
 #[cfg(test)]
+mod cross_daemon;
+#[cfg(test)]
 mod notifyd;
 #[cfg(test)]
 mod rhea;
-#[cfg(test)]
-mod cross_daemon;

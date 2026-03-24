@@ -59,8 +59,14 @@ async fn get_status_returns_json() {
     let reply = proxy.call_method("GetStatus", &()).await.unwrap();
     let status: String = reply.body().deserialize().unwrap();
 
-    assert!(status.contains("backend"), "status should contain backend field: {status}");
-    assert!(status.contains("ready"), "status should contain ready field: {status}");
+    assert!(
+        status.contains("backend"),
+        "status should contain backend field: {status}"
+    );
+    assert!(
+        status.contains("ready"),
+        "status should contain ready field: {status}"
+    );
 
     daemon.shutdown(&conn, RHEA_BUS_NAME).await.unwrap();
 }
@@ -85,9 +91,7 @@ async fn complete_with_none_backend_returns_error_or_empty() {
     let proxy = rhea_proxy(&conn).await.unwrap();
 
     // With no backend configured, Complete should return an error or empty response.
-    let result = proxy
-        .call_method("Complete", &("hello world", ""))
-        .await;
+    let result = proxy.call_method("Complete", &("hello world", "")).await;
 
     // Either an error response or an empty string is acceptable when no backend is configured.
     match result {

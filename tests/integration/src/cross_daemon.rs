@@ -129,8 +129,7 @@ async fn notification_signal_received_by_subscriber() {
     let _id = send_notif(&conn, "test-app", "Hello signal").await.unwrap();
 
     // Wait for the Added signal (with timeout).
-    let signal_result =
-        tokio::time::timeout(Duration::from_secs(3), signal_stream.next()).await;
+    let signal_result = tokio::time::timeout(Duration::from_secs(3), signal_stream.next()).await;
 
     match signal_result {
         Ok(Some(msg)) => {
@@ -142,7 +141,11 @@ async fn notification_signal_received_by_subscriber() {
             tracing::info!(
                 "received Added signal ({} bytes): {}",
                 body.len(),
-                if body.is_empty() { "(empty body)" } else { &body[..body.len().min(80)] }
+                if body.is_empty() {
+                    "(empty body)"
+                } else {
+                    &body[..body.len().min(80)]
+                }
             );
         }
         Ok(None) => {
