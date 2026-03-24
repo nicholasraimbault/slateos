@@ -1,0 +1,129 @@
+// Slate OS — Niri Configuration
+// Target: Pine64 Pinebook Pro (RK3399, 1920x1080 @ 60Hz)
+// Display: eDP-1 (internal 14" IPS panel, landscape native)
+
+output "eDP-1" {
+    mode "1920x1080@60.000"
+    // 1920x1080 on 14" — no scaling needed
+    scale 1.0
+}
+
+// Input — keyboard + touchpad, no touchscreen
+input {
+    touchpad {
+        tap
+        natural-scroll
+        scroll-method "two-finger"
+    }
+}
+
+// Layout — desktop-friendly: tiling with wider gaps, half-width default
+layout {
+    gaps 12
+    center-focused-column "never"
+
+    border {
+        width 2
+        active-color "#6495ED"
+        inactive-color "#2A2A36"
+    }
+
+    // Desktop default: windows open at half width for side-by-side
+    default-column-width { proportion 0.5; }
+
+    struts {
+        top 36
+        bottom 56
+    }
+}
+
+// Animations — same snappy spring physics (RK3399 handles these fine at 60Hz)
+animations {
+    workspace-switch {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    horizontal-view-movement {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-open {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-close {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-resize {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+}
+
+// Audio
+spawn-at-startup "pipewire"
+spawn-at-startup "pipewire-pulse"
+spawn-at-startup "wireplumber"
+
+// Shell apps
+spawn-at-startup "swaybg" "-i" "/usr/share/backgrounds/slate-default.jpg" "-m" "fill"
+spawn-at-startup "waybar"
+spawn-at-startup "slate-palette"
+spawn-at-startup "shoal"
+spawn-at-startup "slate-lock"
+
+// Lock screen on idle — matches LockSettings::idle_timeout_secs default (300s)
+idle {
+    timeout-secs 300
+    on-timeout "dbus-send --session --dest=org.slate.LockScreen --type=method_call /org/slate/LockScreen org.slate.LockScreen.Lock"
+}
+
+// Window rules
+window-rule {
+    match app-id="firefox"
+    default-column-width { proportion 1.0; }
+}
+
+window-rule {
+    match app-id="Alacritty"
+    default-column-width { proportion 0.5; }
+}
+
+// Keyboard bindings
+binds {
+    Mod+Left  { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Up    { focus-window-up; }
+    Mod+Down  { focus-window-down; }
+
+    Mod+Shift+Left  { move-column-left; }
+    Mod+Shift+Right { move-column-right; }
+
+    Mod+F { maximize-column; }
+    Mod+Shift+F { fullscreen-window; }
+
+    Mod+1 { focus-workspace 1; }
+    Mod+2 { focus-workspace 2; }
+    Mod+3 { focus-workspace 3; }
+    Mod+4 { focus-workspace 4; }
+
+    Mod+Shift+1 { move-column-to-workspace 1; }
+    Mod+Shift+2 { move-column-to-workspace 2; }
+    Mod+Shift+3 { move-column-to-workspace 3; }
+    Mod+Shift+4 { move-column-to-workspace 4; }
+
+    Mod+Return { spawn "alacritty"; }
+    Mod+D { spawn "fuzzel"; }
+    Mod+B { spawn "firefox"; }
+
+    Mod+Q { close-window; }
+    Mod+Tab { toggle-overview; }
+    Mod+Shift+E { quit; }
+
+    Print { screenshot; }
+    Mod+Print { screenshot-window; }
+}
+
+debug {
+    enable-overlay-planes
+}
+
+cursor {
+    hide-when-typing
+}

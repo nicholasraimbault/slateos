@@ -1,0 +1,106 @@
+// Slate OS — Niri Configuration
+// Target: Pine64 PinePhone Pro (RK3399S, 720x1440 @ 60Hz)
+// Display: DSI-1 (internal 6" IPS panel, portrait native)
+
+output "DSI-1" {
+    mode "720x1440@60.000"
+    // 1440px on 6" — 2x scale → 360x720 logical pixels
+    scale 2.0
+}
+
+// Input — capacitive touchscreen only
+input {
+    touch {
+        map-to-output "DSI-1"
+    }
+}
+
+// Layout — phone: everything fullscreen, minimal gaps
+layout {
+    gaps 4
+    center-focused-column "never"
+
+    border {
+        width 2
+        active-color "#6495ED"
+        inactive-color "#2A2A36"
+    }
+
+    default-column-width { proportion 1.0; }
+
+    // Smaller struts for phone form factor
+    struts {
+        top 32
+        bottom 48
+    }
+}
+
+// Animations — same snappy spring physics (RK3399S handles these at 60Hz)
+animations {
+    workspace-switch {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    horizontal-view-movement {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-open {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-close {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+    window-resize {
+        spring damping-ratio=0.85 stiffness=800 epsilon=0.001
+    }
+}
+
+// Audio
+spawn-at-startup "pipewire"
+spawn-at-startup "pipewire-pulse"
+spawn-at-startup "wireplumber"
+
+// Shell apps
+spawn-at-startup "swaybg" "-i" "/usr/share/backgrounds/slate-default.jpg" "-m" "fill"
+spawn-at-startup "waybar"
+spawn-at-startup "slate-palette"
+spawn-at-startup "touchflow"
+spawn-at-startup "shoal"
+spawn-at-startup "wvkbd-slate"
+spawn-at-startup "slate-suggest"
+spawn-at-startup "slate-lock"
+
+// Lock screen on idle — shorter timeout for phone (180s)
+idle {
+    timeout-secs 180
+    on-timeout "dbus-send --session --dest=org.slate.LockScreen --type=method_call /org/slate/LockScreen org.slate.LockScreen.Lock"
+}
+
+// Window rules — everything opens maximized on phone
+window-rule {
+    match app-id="firefox"
+    default-column-width { proportion 1.0; }
+    open-maximized true
+}
+
+window-rule {
+    match app-id="Alacritty"
+    default-column-width { proportion 1.0; }
+    open-maximized true
+}
+
+// Minimal keyboard bindings (for external keyboard only)
+binds {
+    Mod+Q { close-window; }
+    Mod+Tab { toggle-overview; }
+}
+
+// Direct scanout for fullscreen apps
+debug {
+    enable-overlay-planes
+}
+
+// Touch device — cursor never needed
+cursor {
+    hide-when-typing
+    hide-after-inactive-ms 0
+}

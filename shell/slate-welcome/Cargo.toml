@@ -1,0 +1,18 @@
+[package]
+name = "slate-welcome"
+version = "0.1.0"
+edition = "2021"
+description = "First-boot setup wizard for Slate OS"
+
+[[bin]]
+name = "slate-welcome"
+path = "src/main.rs"
+
+[dependencies]
+slate-common = { path = "../slate-common" }
+iced = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = { workspace = true }
+argon2 = { version = "0.5", features = ["std"] }

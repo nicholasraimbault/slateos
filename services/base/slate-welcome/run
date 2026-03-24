@@ -1,0 +1,6 @@
+#!/bin/sh
+# Only run on first boot — exits immediately if setup is already done.
+if [ -f "$HOME/.config/slate/.welcome-done" ]; then
+    exec sleep infinity
+fi
+exec /usr/lib/slate/slate-welcome

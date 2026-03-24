@@ -2,7 +2,7 @@
 # Build Slate OS rootfs
 # Base: Chimera Linux (musl, LLVM/clang, apk)
 # Usage: build-rootfs.sh [rootfs_dir] [output.tar.gz] [device]
-# Devices: pixel-tablet (default), pixel-phone, generic-x86
+# Devices: pixel-tablet (default), pixel-phone, pinebook-pro, pinetab-2, pinephone-pro, generic-x86
 set -euo pipefail
 
 ROOTFS_DIR="${1:-/root/slate-rootfs}"
@@ -17,7 +17,7 @@ echo "Source: $SLATE_SRC"
 
 # Determine architecture from device
 case "$DEVICE" in
-    pixel-tablet|pixel-phone)
+    pixel-tablet|pixel-phone|pinebook-pro|pinetab-2|pinephone-pro)
         TARGET_ARCH="aarch64"
         ;;
     generic-x86)
@@ -25,7 +25,7 @@ case "$DEVICE" in
         ;;
     *)
         echo "ERROR: Unknown device '$DEVICE'"
-        echo "  Supported: pixel-tablet, pixel-phone, generic-x86"
+        echo "  Supported: pixel-tablet, pixel-phone, pinebook-pro, pinetab-2, pinephone-pro, generic-x86"
         exit 1
         ;;
 esac
@@ -139,7 +139,7 @@ cd /tmp/slate-os
 cargo build --release --workspace
 
 # Install shell binaries
-for bin in touchflow shoal slate-launcher claw-panel slate-palette slate-suggest slate-settings slate-power-monitor slate-notifyd slate-shade slate-lock rhea; do
+for bin in touchflow shoal slate-launcher claw-panel slate-palette slate-suggest slate-settings slate-power-monitor slate-notifyd slate-shade slate-lock slate-welcome rhea; do
     if [ -f "target/release/$bin" ]; then
         install -Dm755 "target/release/$bin" "/usr/bin/$bin"
     fi
