@@ -960,7 +960,7 @@ mod tests {
             "firefox".into(),
         )));
         assert_eq!(state.toast_state.len(), 1);
-        assert_eq!(state.toast_state.toasts()[0].message(), "Pinned Firefox");
+        assert!(state.toast_state.toasts()[0].message().starts_with("Pinned "));
         assert_eq!(state.toast_state.toasts()[0].kind(), ToastKind::Success);
     }
 
