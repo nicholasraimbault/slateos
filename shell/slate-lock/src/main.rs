@@ -556,7 +556,7 @@ mod tests {
     fn lock_requested_transitions_to_pin_pad() {
         // Default width is 1280 (tablet), so should go straight to PIN pad.
         let mut app = SlateLock::default();
-        update_app(&mut app, Message::DbusEvent(LockDbusEvent::LockRequested));
+        let _ = update_app(&mut app, Message::DbusEvent(LockDbusEvent::LockRequested));
         assert_eq!(app.phase, LockPhase::ShowingPinPad);
     }
 
@@ -564,7 +564,7 @@ mod tests {
     fn lock_requested_phone_shows_clock_first() {
         let mut app = SlateLock::default();
         app.window_width = 400.0; // phone
-        update_app(&mut app, Message::DbusEvent(LockDbusEvent::LockRequested));
+        let _ = update_app(&mut app, Message::DbusEvent(LockDbusEvent::LockRequested));
         assert_eq!(app.phase, LockPhase::ShowingClock);
     }
 
@@ -572,7 +572,7 @@ mod tests {
     fn tap_to_unlock_transitions_from_clock() {
         let mut app = SlateLock::default();
         app.phase = LockPhase::ShowingClock;
-        update_app(&mut app, Message::TapToUnlock);
+        let _ = update_app(&mut app, Message::TapToUnlock);
         assert_eq!(app.phase, LockPhase::ShowingPinPad);
     }
 
@@ -581,7 +581,7 @@ mod tests {
         let mut app = SlateLock::default();
         app.phase = LockPhase::Authenticating;
         app.failure_count = 3;
-        update_app(&mut app, Message::AuthCompleted(AuthResult::Success));
+        let _ = update_app(&mut app, Message::AuthCompleted(AuthResult::Success));
         assert_eq!(app.phase, LockPhase::Hidden);
         assert_eq!(app.failure_count, 0);
     }
@@ -590,7 +590,7 @@ mod tests {
     fn auth_wrong_increments_failure_count() {
         let mut app = SlateLock::default();
         app.phase = LockPhase::Authenticating;
-        update_app(
+        let _ = update_app(
             &mut app,
             Message::AuthCompleted(AuthResult::WrongCredential),
         );
@@ -603,7 +603,7 @@ mod tests {
     fn auth_not_configured_unlocks_gracefully() {
         let mut app = SlateLock::default();
         app.phase = LockPhase::Authenticating;
-        update_app(&mut app, Message::AuthCompleted(AuthResult::NotConfigured));
+        let _ = update_app(&mut app, Message::AuthCompleted(AuthResult::NotConfigured));
         assert_eq!(app.phase, LockPhase::Hidden);
     }
 
@@ -627,7 +627,7 @@ mod tests {
         let mut app = SlateLock::default();
         app.phase = LockPhase::ShowingPinPad;
         app.cooldown_until = Some(Instant::now() + Duration::from_secs(60));
-        update_app(&mut app, Message::PinPad(PinPadAction::Digit('1')));
+        let _ = update_app(&mut app, Message::PinPad(PinPadAction::Digit('1')));
         assert!(app.pin_pad.entered.is_empty());
     }
 
@@ -644,7 +644,7 @@ mod tests {
     fn palette_change_updates_state() {
         let mut app = SlateLock::default();
         let new_palette = Palette::default();
-        update_app(
+        let _ = update_app(
             &mut app,
             Message::DbusEvent(LockDbusEvent::PaletteChanged(new_palette.clone())),
         );
