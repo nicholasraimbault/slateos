@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, scrollable, text, text_input};
 use iced::{Alignment, Element, Length};
 
 // ---------------------------------------------------------------------------
