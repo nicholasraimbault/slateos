@@ -5,11 +5,12 @@ SlateOS is a Linux distribution for tablets, phones, and desktops.
 Based on Chimera Linux (musl, LLVM/Clang, apk) with a custom touch-first shell built in Rust.
 
 ## Target Devices
-- **Pixel Tablet** (Tensor G2) — primary target
-- **Pixel phones** (Tensor) — secondary target
-- **Pixel Fold** (Tensor G2) — secondary target
-- **Framework Laptop 12** (x86, touchscreen) — dev machine / tertiary target
-- **Generic x86 desktop/laptop** — tertiary target
+- **Framework Laptop 12** (x86, touchscreen) — primary target, full mainline kernel support
+- **Generic x86 desktop/laptop** — secondary target
+- **Pixel Tablet** (Tensor G2) — future target (blocked on Panthor G710 GPU driver + GS201 device tree upstream)
+- **Pixel phones** (Tensor) — future target (same kernel blockers)
+
+Mainline-only policy: SlateOS only targets devices with full mainline Linux kernel support. No out-of-tree drivers or vendor blobs.
 
 ## Base System
 - Distro: Chimera Linux (musl libc, LLVM/Clang toolchain)
