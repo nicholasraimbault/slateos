@@ -62,6 +62,7 @@ impl Step {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Variants are stubbed for implementation
 pub enum StepAction {
     // WiFi
     WifiSsidInput(String),
@@ -101,6 +102,7 @@ pub enum StepAction {
 
 /// Mutable state for all wizard steps. Lives in the parent app.
 #[derive(Debug, Default, Clone)]
+#[allow(dead_code)] // Fields populated when steps are fully wired
 pub struct StepState {
     // WiFi
     pub wifi_ssid: String,

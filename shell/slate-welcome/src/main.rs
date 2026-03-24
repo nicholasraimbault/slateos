@@ -13,7 +13,7 @@
 mod steps;
 
 use iced::widget::{button, column, container, text};
-use iced::{Alignment, Element, Length, Subscription, Task, Theme};
+use iced::{Alignment, Element, Length, Task};
 
 use slate_common::theme::create_theme;
 use slate_common::Palette;
@@ -185,10 +185,6 @@ fn main() -> anyhow::Result<()> {
         .run_with(|| (Welcome::default(), Task::none()))?;
 
     Ok(())
-}
-
-fn subscription(_app: &Welcome) -> Subscription<Message> {
-    Subscription::none()
 }
 
 // ---------------------------------------------------------------------------
